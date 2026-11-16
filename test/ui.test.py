@@ -141,18 +141,18 @@ with sync_playwright() as p:
     check(page.locator(".linkrow img").count() == 1 and "ytimg.com/vi/dQw4w9WgXcQ" in page.get_attribute(".linkrow img", "src"), "YouTube hiện ảnh thumbnail")
     check("Hoàng hôn đẹp" in page.inner_text("main"), "hiện tiêu đề do người dùng nhập")
 
-    page.fill("#linkUrl", "https://www.tiktok.com/@foodie/video/7300000000000000000?is_from_webapp=1&sender_device=pc")
+    page.fill("#linkUrl", "https://www.tiktok.com/@naydidaunhi/video/7704723121135275284?is_from_webapp=1&sender_device=pc")
     page.select_option("#linkPlaceSel", "yaowarat")
     page.click("[data-act=addlink]")
     page.wait_for_function("document.querySelectorAll('.linkrow').length === 2")
     page.wait_for_function("document.querySelector('main').innerText.includes('Tiêu đề tự lấy')")  # oEmbed tự điền
     st = json.loads(page.evaluate("localStorage.getItem('bkkswipe.v1')"))
     tk = [l for l in st["links"] if l["type"] == "tiktok"][0]
-    check(tk["url"] == "https://www.tiktok.com/@foodie/video/7300000000000000000", "TikTok được bỏ tham số theo dõi")
+    check(tk["url"] == "https://www.tiktok.com/@naydidaunhi/video/7704723121135275284", "TikTok được bỏ tham số theo dõi")
     check("<" not in tk["title"], "tiêu đề oEmbed được làm sạch ký tự HTML")
     check(page.locator("main b >> text=<b>").count() == 0, "tiêu đề không chèn được thẻ HTML")
 
-    page.fill("#linkUrl", "https://www.tiktok.com/@foodie/video/7300000000000000000")
+    page.fill("#linkUrl", "https://www.tiktok.com/@naydidaunhi/video/7704723121135275284")
     page.select_option("#linkPlaceSel", "yaowarat")
     page.click("[data-act=addlink]")
     check("đã có" in page.inner_text("#toast"), "link trùng bị báo, không lưu hai lần")
@@ -206,6 +206,15 @@ with sync_playwright() as p:
 
     page.close()
     # màn nhỏ 320px
+    # kịch bản bộ nhớ đệm: app.js mới nhưng lib.js cũ (không có parseVideoLink)
+    import subprocess
+    old = subprocess.run(["git", "-C", "/home/claude/bkk-swipe-repo", "show", "c274b36:lib.js"], capture_output=True, text=True).stdout
+    p3 = ctx.new_page()
+    p3.route(re.compile(r"/lib\.js"), lambda r: r.fulfill(status=200, content_type="application/javascript", body=old))
+    p3.goto(URL)
+    p3.wait_for_selector("text=Cần tải lại trang")
+    check(p3.locator("button", has_text="Tải lại bản mới").count() == 1, "lib.js cũ lẫn app.js mới: báo 'Cần tải lại trang' thay vì im lặng")
+    p3.close()
     p2 = ctx.new_page(); p2.set_viewport_size({"width": 320, "height": 640}); p2.goto(URL); p2.wait_for_selector(".card.top")
     p2.screenshot(path=f"{OUT}/6-small.png")
     check(not p2.evaluate("document.documentElement.scrollWidth > window.innerWidth + 1"), "không tràn ngang trên màn 320px")

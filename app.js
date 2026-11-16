@@ -4,6 +4,16 @@
   var C = window.BKK_CONFIG;
   var L = window.BKK;
   var ALL = window.BKK_PLACES;
+
+  // Nếu trình duyệt giữ lẫn file cũ và mới (bộ nhớ đệm), báo rõ thay vì im lặng không chạy.
+  if (!C || !L || !ALL || typeof L.parseVideoLink !== "function") {
+    document.getElementById("app").innerHTML =
+      '<div style="padding:28px 20px;font-family:system-ui,sans-serif"><h2>Cần tải lại trang</h2>' +
+      "<p>Trình duyệt đang giữ một phần bản cũ của BKK Swipe. Bấm nút dưới để tải bản mới nhất.</p>" +
+      '<button style="padding:12px 18px;border-radius:12px;border:0;background:#e8317a;color:#fff;font-weight:700;font-size:16px" ' +
+      'onclick="location.href=location.pathname+\'?r=\'+Date.now()">Tải lại bản mới</button></div>';
+    return;
+  }
   var CURATED = window.BKK_CURATED || {};
   var KEY = "bkkswipe.v1";
   var BANGKOK = { lat: 13.7563, lng: 100.5018 };
@@ -172,7 +182,7 @@
     var thumb = l.type === "youtube" && l.id
       ? '<img loading="lazy" alt="" src="https://i.ytimg.com/vi/' + encodeURIComponent(l.id) + '/mqdefault.jpg">'
       : '<span class="em" aria-hidden="true">' + PLAT[l.type].e + "</span>";
-    return '<div class="linkrow"><a class="vid" target="_blank" rel="noopener" href="' + esc(l.url) + '">' + thumb +
+    return '<div class="linkrow"' + (l.lid ? ' id="lk-' + l.lid + '"' : "") + '><a class="vid" target="_blank" rel="noopener" href="' + esc(l.url) + '">' + thumb +
       "<span><b>" + esc(linkLabel(l)) + "</b><br>" + PLAT[l.type].vi + (l.by ? " · " + esc(l.by) : "") + "</span></a>" +
       (l.lid ? '<button class="icon-btn" data-act="rmlink" data-lid="' + l.lid + '" aria-label="Xóa link">🗑️</button>' : "") + "</div>";
   }
@@ -564,6 +574,13 @@
   function shareLink() { return location.href.split("#")[0] + "#" + myCode(); }
 
   function act(name, el) {
+    try { actInner(name, el); }
+    catch (err) {
+      toast("Có lỗi: " + (err && err.message ? err.message : err) + ". Hãy tải lại trang rồi thử lại.");
+      if (window.console) console.error(err);
+    }
+  }
+  function actInner(name, el) {
     var d = el.dataset;
     switch (name) {
       case "tab": tab = d.tab; closeSheet(); render(); $("#main").scrollTop = 0; break;
@@ -604,7 +621,12 @@
         linkPlace = $("#linkPlaceSel").value;
         var entry = pushLink(linkPlace, pv, $("#linkTitle").value, S.name || "Tôi", true);
         if (!entry) { toast("Link này đã có ở địa điểm đó rồi."); break; }
-        save(); render(); toast("Đã thêm link " + PLAT[pv.type].vi + ".");
+        save(); render(); toast("Đã thêm link " + PLAT[pv.type].vi + ". Xem ở mục Link đã lưu bên dưới.");
+        var added = document.getElementById("lk-" + entry.lid);
+        if (added) {
+          added.classList.add("flash");
+          if (added.scrollIntoView) added.scrollIntoView({ block: "center", behavior: reduceMotion ? "auto" : "smooth" });
+        }
         autoTitle(entry);
         break;
       }
