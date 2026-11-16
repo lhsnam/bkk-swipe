@@ -51,6 +51,7 @@ nav.tabs button[aria-current="page"] { background: #ffffff1f; color: #fff; font-
 /* Chips */
 .chips-row { display: flex; gap: 8px; overflow-x: auto; padding: 4px 0 10px; scrollbar-width: none; flex: none; }
 .chips-row::-webkit-scrollbar { display: none; }
+.chips-row.wrap { flex-wrap: wrap; overflow: visible; }
 .chip-btn { border: 1px solid var(--line); background: var(--card); border-radius: 99px; padding: 8px 14px; font-size: 14px; white-space: nowrap; min-height: 40px; }
 .chip-btn[aria-pressed="true"] { background: var(--ink); color: #fff; border-color: var(--ink); }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }

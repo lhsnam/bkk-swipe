@@ -18,6 +18,10 @@
     return 2 * R * Math.asin(Math.min(1, Math.sqrt(x)));
   }
 
+  function hasCoords(p) {
+    return !!p && typeof p.lat === "number" && typeof p.lng === "number" && isFinite(p.lat) && isFinite(p.lng);
+  }
+
   /** Ước tính thời gian (phút) theo phương tiện. Chỉ mang tính tham khảo vì giao thông Bangkok khó đoán. */
   function estimateMinutes(km, mode) {
     const road = km * 1.35; // đường thực tế dài hơn đường chim bay
@@ -183,9 +187,9 @@
         const day = plan[o.i];
         if (day.slots[o.s].length >= SLOT_CAP[o.s]) continue;
         const existing = SLOT_ORDER.reduce((a, s) => a.concat(day.slots[s]), []);
-        const cluster = existing.length
-          ? existing.reduce((a, e) => a + haversine(e, p), 0) / existing.length
-          : 3;
+        // Địa điểm chưa có tọa độ (người dùng tự thêm) thì không gom theo khoảng cách được.
+        const ds = existing.filter((e) => hasCoords(e) && hasCoords(p)).map((e) => haversine(e, p));
+        const cluster = ds.length ? ds.reduce((a, d) => a + d, 0) / ds.length : 3;
         const cost = cluster + existing.length * 1.5;
         if (cost < bestCost) {
           bestCost = cost;
@@ -201,7 +205,7 @@
       let prev = null;
       SLOT_ORDER.forEach((s) => {
         const arr = day.slots[s];
-        if (arr.length === 2 && prev) {
+        if (arr.length === 2 && hasCoords(prev) && hasCoords(arr[0]) && hasCoords(arr[1])) {
           if (haversine(prev, arr[1]) < haversine(prev, arr[0])) arr.reverse();
         }
         if (arr.length) prev = arr[arr.length - 1];
@@ -286,6 +290,7 @@
   }
 
   const api = {
+    hasCoords,
     parseVideoLink,
     SLOT_ORDER,
     SLOT_CAP,

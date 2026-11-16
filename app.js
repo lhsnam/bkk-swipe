@@ -33,9 +33,11 @@
   var SLOT_VI = { morning: "Sáng", afternoon: "Chiều", evening: "Tối", night: "Khuya" };
   var WD_VI = ["Chủ nhật", "Thứ Hai", "Thứ Ba", "Thứ Tư", "Thứ Năm", "Thứ Sáu", "Thứ Bảy"];
   var PRICE = ["", "฿", "฿฿", "฿฿฿"];
+  var CAT_E = { food: "🍜", photo: "📸", shop: "🛍️", night: "🌙", sky: "🌃" };
+  var CAT_SLOTS = { food: ["afternoon", "evening"], photo: ["morning", "afternoon"], shop: ["afternoon"], night: ["evening", "night"], sky: ["evening", "night"] };
 
   /* ---------- Trạng thái ---------- */
-  function defaults() { return { name: "", votes: {}, hotel: null, mode: "transit", members: [], minVotes: 0, links: [] }; }
+  function defaults() { return { name: "", votes: {}, hotel: null, mode: "transit", members: [], minVotes: 0, links: [], custom: [] }; }
   function load() {
     try {
       var s = JSON.parse(localStorage.getItem(KEY));
@@ -55,6 +57,11 @@
   var openKind = null; // "place" | "settings"
   var resetArmed = false;
   var linkPlace = ALL[0].id; // địa điểm đang chọn trong form thêm link
+  var formMode = "new"; // "new" = tạo địa điểm mới từ link, "review" = gắn link vào địa điểm có sẵn
+  var newCat = "food";
+  var formVals = { url: "", name: "", loc: "", note: "", title: "" };
+  var delArmedId = null;
+  var lastTab = "swipe";
 
   /* ---------- Tiện ích ---------- */
   function esc(s) {
@@ -71,10 +78,10 @@
     toastTimer = setTimeout(function () { t.hidden = true; }, 3200);
   }
   function fmtDate(iso) { var p = iso.split("-"); return Number(p[2]) + "/" + Number(p[1]); }
-  function byId(id) { return ALL.filter(function (p) { return p.id === id; })[0]; }
+  function byId(id) { return ALL.concat(customPlaces()).filter(function (p) { return p.id === id; })[0]; }
 
   function places() {
-    return ALL.filter(function (p) {
+    return ALL.concat(customPlaces()).filter(function (p) {
       var lp = live.places[p.id];
       return !(lp && lp.status === "CLOSED_PERMANENTLY");
     });
@@ -92,12 +99,12 @@
   function originParam() { var o = origin(); return o ? o.lat.toFixed(6) + "," + o.lng.toFixed(6) : null; }
   function distText(p) {
     var o = origin();
-    if (!o) return "";
+    if (!o || !L.hasCoords(p)) return "";
     var km = L.haversine(o, p);
     return "📍 " + km.toFixed(1) + " km từ " + o.label + " · ~" + L.estimateMinutes(km, S.mode) + " phút " + MODE_VI[S.mode];
   }
   function dirUrl(list, mode) {
-    return L.mapsDirUrl({ origin: originParam(), stops: list.map(function (p) { return p.q; }), mode: mode || S.mode });
+    return L.mapsDirUrl({ origin: originParam(), stops: list.map(function (p) { return p.mq || p.q; }), mode: mode || S.mode });
   }
 
   function locate() {
@@ -126,7 +133,10 @@
   }
   function myCode() {
     var k = S.links.filter(function (l) { return l.mine; }).slice(0, 40).map(function (l) { return [l.place, l.url, l.title || ""]; });
-    var o = { n: (S.name || "Tôi").slice(0, 20), l: likedIds(), k: k };
+    var c = S.custom.filter(function (x) { return x.mine; }).slice(0, 20).map(function (x) {
+      return { id: x.id, n: x.name, c: x.cat, la: x.lat, ln: x.lng, x: x.exact ? 1 : 0, t: x.note || "" };
+    });
+    var o = { n: (S.name || "Tôi").slice(0, 20), l: likedIds(), k: k, c: c };
     return "BKK1." + btoa(unescape(encodeURIComponent(JSON.stringify(o))));
   }
   function parseCode(s) {
@@ -136,18 +146,32 @@
       var raw = s.slice(i + 5).trim().replace(/[^A-Za-z0-9+/=_-]+.*$/, "");
       var o = JSON.parse(decodeURIComponent(escape(atob(raw))));
       if (!o || typeof o.n !== "string" || !Array.isArray(o.l)) return null;
+      var cs = (Array.isArray(o.c) ? o.c : []).slice(0, 20).map(function (x) {
+        if (!x || typeof x !== "object" || !/^u-[a-z0-9]{3,10}$/.test(String(x.id))) return null;
+        var nm = String(x.n || "").replace(/[<>]/g, "").trim().slice(0, 60);
+        if (!nm || !CAT_E[x.c]) return null;
+        var la = Number(x.la), ln = Number(x.ln);
+        var okPos = x.la != null && x.ln != null && isFinite(la) && isFinite(ln) && inThailand(la, ln);
+        return { id: x.id, name: nm, cat: x.c, lat: okPos ? la : null, lng: okPos ? ln : null, exact: okPos && x.x === 1, note: String(x.t || "").replace(/[<>]/g, "").slice(0, 120) };
+      }).filter(Boolean);
+      var known = function (id) { return !!byId(id) || cs.some(function (c) { return c.id === id; }); };
       var k = (Array.isArray(o.k) ? o.k : []).slice(0, 40).map(function (x) {
-        if (!Array.isArray(x) || !byId(x[0])) return null;
+        if (!Array.isArray(x) || !known(x[0])) return null;
         var pv = L.parseVideoLink(x[1]); // kiểm tra lại, không tin dữ liệu từ người khác
         if (!pv) return null;
         return { place: x[0], url: pv.url, type: pv.type, id: pv.id, title: String(x[2] || "").replace(/[<>]/g, "").slice(0, 80) };
       }).filter(Boolean);
-      return { n: o.n.replace(/[<>]/g, "").slice(0, 20) || "Bạn", l: o.l.filter(function (id) { return !!byId(id); }), k: k };
+      return { n: o.n.replace(/[<>]/g, "").slice(0, 20) || "Bạn", l: o.l.filter(function (id) { return /^[a-z0-9-]{1,40}$/.test(String(id)); }), k: k, c: cs };
     } catch (e) { return null; }
   }
   function addMember(m) {
+    (m.c || []).forEach(function (c) {
+      if (S.custom.some(function (x) { return x.id === c.id; })) return;
+      S.custom.push({ id: c.id, name: c.name, cat: c.cat, lat: c.lat, lng: c.lng, exact: c.exact, note: c.note, by: m.n, mine: false });
+    });
     (m.k || []).forEach(function (x) { pushLink(x.place, L.parseVideoLink(x.url), x.title, m.n, false); });
-    S.members = S.members.filter(function (x) { return x.n !== m.n; }).concat([{ n: m.n, l: m.l }]);
+    S.members = S.members.filter(function (x) { return x.n !== m.n; })
+      .concat([{ n: m.n, l: m.l.filter(function (id) { return !!byId(id); }) }]);
     save();
   }
 
@@ -205,7 +229,7 @@
   }
   function curatedSnippet() {
     var by = {};
-    S.links.forEach(function (l) { (by[l.place] = by[l.place] || []).push(l); });
+    S.links.forEach(function (l) { if (ALL.some(function (p) { return p.id === l.place; })) (by[l.place] = by[l.place] || []).push(l); });
     var lines = Object.keys(by).map(function (id) {
       return "  " + id + ": [\n" + by[id].map(function (l) {
         return "    { type: " + JSON.stringify(l.type) + ", title: " + JSON.stringify(l.title || "") + ", url: " + JSON.stringify(l.url) + " }";
@@ -214,27 +238,123 @@
     return lines.join(",\n");
   }
 
+  /* ---------- Địa điểm do người dùng thêm từ link ---------- */
+  function inThailand(la, ln) { return la > 5 && la < 21 && ln > 97 && ln < 106; }
+  function hashId(str) {
+    var h = 2166136261;
+    for (var i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); }
+    return "u-" + (h >>> 0).toString(36);
+  }
+  function toPlace(c) {
+    var has = typeof c.lat === "number" && typeof c.lng === "number";
+    var srcs = S.links.filter(function (l) { return l.place === c.id; }).map(function (l) {
+      return { t: PLAT[l.type].vi + (l.by ? " · " + l.by : ""), u: l.url };
+    });
+    return {
+      id: c.id, name: c.name, q: c.name + " Bangkok", mq: c.exact && has ? c.lat + "," + c.lng : c.name + " Bangkok",
+      emoji: CAT_E[c.cat] || "📍", cats: [c.cat], lat: has ? c.lat : null, lng: has ? c.lng : null, approx: !c.exact,
+      area: "Thêm bởi " + c.by, transit: "", hours: "Kiểm tra giờ trên Google Maps", price: 0, priceNote: "",
+      slots: CAT_SLOTS[c.cat] || ["afternoon"], dur: 90,
+      blurb: c.note || "Địa điểm do " + c.by + " thêm từ một link review. Mở link bên dưới để xem quán này có gì hay.",
+      tips: [], warn: "Địa điểm do nhóm tự thêm từ link, chưa được kiểm tra giờ mở cửa và vị trí.", check: true,
+      sources: srcs, custom: true, by: c.by
+    };
+  }
+  function customPlaces() { return S.custom.map(toPlace); }
+  function addCustom(o) {
+    var id = hashId(o.pv.url);
+    var dup = S.custom.filter(function (c) { return c.id === id; })[0];
+    if (dup) return { dup: dup };
+    var c = {
+      id: id, name: o.name, cat: o.cat, lat: o.coords ? o.coords.lat : null, lng: o.coords ? o.coords.lng : null,
+      exact: !!o.coords, note: String(o.note || "").replace(/[<>]/g, "").trim().slice(0, 120), by: o.by, mine: true
+    };
+    S.custom.push(c);
+    return { place: c, link: pushLink(id, o.pv, "", o.by, true) };
+  }
+  function geocode(id) {
+    // Cố tìm vị trí gần đúng theo tên bằng OpenStreetMap Nominatim (chỉ trong khu vực Bangkok). Không được thì thôi.
+    if (!window.fetch || !window.AbortController) return;
+    var c = S.custom.filter(function (x) { return x.id === id; })[0];
+    if (!c || c.lat != null) return;
+    var ctl = new AbortController();
+    var timer = setTimeout(function () { ctl.abort(); }, 4000);
+    fetch("https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&bounded=1&viewbox=100.30,14.05,100.95,13.45&q=" + encodeURIComponent(c.name),
+      { signal: ctl.signal, headers: { Accept: "application/json" } })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (arr) {
+        clearTimeout(timer);
+        var h = arr && arr[0];
+        var la = h ? parseFloat(h.lat) : NaN, ln = h ? parseFloat(h.lon) : NaN;
+        if (isFinite(la) && isFinite(ln) && inThailand(la, ln) && c.lat == null) {
+          c.lat = la; c.lng = ln; c.exact = false; save();
+          toast("Đã tự tìm vị trí gần đúng cho " + c.name + ".");
+          if (!activeIsInput()) render();
+        }
+      }).catch(function () { clearTimeout(timer); });
+  }
+  function customBlock(p) {
+    if (!p.custom) return "";
+    var c = S.custom.filter(function (x) { return x.id === p.id; })[0];
+    var txt = L.hasCoords(p)
+      ? (c && c.exact ? "Vị trí do bạn nhập." : "Vị trí app tự tìm theo tên nên có thể lệch. Hãy kiểm tra trên bản đồ.")
+      : "Chưa có vị trí nên chưa tính được khoảng cách. Dán tọa độ bên dưới nếu muốn.";
+    return '<div class="banner">' + esc(txt) + "</div>" +
+      '<label class="field">Cập nhật vị trí (tọa độ hoặc link Google Maps dài)<input id="cuCoords" placeholder="13.75633, 100.50177"></label>' +
+      '<div class="btn-row"><button class="btn ghost" data-act="setcoords" data-id="' + p.id + '">Lưu vị trí</button>' +
+      '<button class="btn ghost" data-act="rmplace" data-id="' + p.id + '">' + (delArmedId === p.id ? "Bấm lần nữa để xóa" : "Xóa địa điểm này") + "</button></div>";
+  }
+  function hintFor(v) {
+    v = (v || "").trim();
+    if (!v) return "";
+    var pv = L.parseVideoLink(v);
+    return pv ? "✅ Nhận diện: " + PLAT[pv.type].vi : "⚠️ Chưa nhận ra link TikTok, YouTube hoặc Facebook.";
+  }
+
   function viewLinks() {
-    var opts = places().map(function (p) {
-      return '<option value="' + p.id + '"' + (p.id === linkPlace ? " selected" : "") + ">" + p.emoji + " " + esc(p.name) + "</option>";
-    }).join("");
-    var out = '<h3 class="sec">Thêm link review</h3>' +
-      '<div class="banner">Dán link <b>TikTok</b> hoặc <b>YouTube</b> (Facebook cũng được). Dán cả đoạn chữ chia sẻ kèm link vẫn nhận. Link lưu trên máy này và đi kèm khi bạn chia sẻ lựa chọn ở mục Top.</div>' +
-      '<label class="field">Link<input id="linkUrl" inputmode="url" autocomplete="off" autocapitalize="off" placeholder="https://www.tiktok.com/@…/video/… hoặc https://youtu.be/…"></label>' +
-      '<div class="live-note" id="linkHint" aria-live="polite"></div>' +
-      '<label class="field">Review này về địa điểm nào?<select id="linkPlaceSel">' + opts + "</select></label>" +
-      '<label class="field">Ghi chú / tiêu đề (không bắt buộc)<input id="linkTitle" maxlength="80" placeholder="Ví dụ: quán này ngon, xếp hàng 30 phút"></label>' +
-      '<button class="btn pink block" data-act="addlink">Thêm link</button>';
+    var out = '<h3 class="sec">Thêm từ link TikTok / YouTube</h3>' +
+      '<div class="banner">Thấy một quán, chỗ chụp ảnh hay chợ đêm trong video? Dán link và đặt tên địa điểm, app sẽ thêm vào danh sách vuốt cho cả nhóm.</div>' +
+      '<div class="seg" role="group" aria-label="Kiểu thêm">' +
+      '<button data-act="formmode" data-mode="new" aria-pressed="' + (formMode === "new") + '">Địa điểm mới</button>' +
+      '<button data-act="formmode" data-mode="review" aria-pressed="' + (formMode === "review") + '">Review cho nơi có sẵn</button></div>' +
+      '<label class="field">Link TikTok / YouTube<input id="linkUrl" inputmode="url" autocomplete="off" autocapitalize="off" value="' + esc(formVals.url) + '" placeholder="https://www.tiktok.com/@…/video/… hoặc https://youtu.be/…"></label>' +
+      '<div class="live-note" id="linkHint" aria-live="polite">' + esc(hintFor(formVals.url)) + "</div>";
+    if (formMode === "new") {
+      out += '<label class="field">Tên địa điểm<input id="newName" maxlength="60" autocomplete="off" value="' + esc(formVals.name) + '" placeholder="Ví dụ: Thip Samai Pad Thai"></label>' +
+        '<div class="live-note">App chưa tự đọc được tên quán từ video, nên bạn nhập tên nhé.</div>' +
+        '<div class="field">Loại</div><div class="chips-row wrap" role="group" aria-label="Loại địa điểm">' +
+        CATS.filter(function (c) { return c.k !== "all"; }).map(function (c) {
+          return '<button class="chip-btn" data-act="newcat" data-cat="' + c.k + '" aria-pressed="' + (newCat === c.k) + '">' + c.e + " " + c.vi + "</button>";
+        }).join("") + "</div>" +
+        '<label class="field">Vị trí (không bắt buộc)<input id="newLoc" autocomplete="off" value="' + esc(formVals.loc) + '" placeholder="Tọa độ hoặc link Google Maps dài. Bỏ trống để app tự tìm theo tên"></label>' +
+        '<label class="field">Ghi chú (không bắt buộc)<input id="newNote" maxlength="120" autocomplete="off" value="' + esc(formVals.note) + '" placeholder="Ví dụ: ngon, xếp hàng 30 phút"></label>' +
+        '<button class="btn pink block" data-act="addplace">➕ Thêm vào danh sách vuốt</button>';
+    } else {
+      var opts = places().filter(function (p) { return !p.custom; }).map(function (p) {
+        return '<option value="' + p.id + '"' + (p.id === linkPlace ? " selected" : "") + ">" + p.emoji + " " + esc(p.name) + "</option>";
+      }).join("");
+      out += '<label class="field">Review này về địa điểm nào?<select id="linkPlaceSel">' + opts + "</select></label>" +
+        '<label class="field">Ghi chú / tiêu đề (không bắt buộc)<input id="linkTitle" maxlength="80" autocomplete="off" value="' + esc(formVals.title) + '" placeholder="Ví dụ: xếp hàng 30 phút"></label>' +
+        '<button class="btn pink block" data-act="addlink">Thêm link review</button>';
+    }
+
+    if (S.custom.length) {
+      out += '<h3 class="sec">Địa điểm đã thêm từ link (' + S.custom.length + ')</h3><ul class="list">' + customPlaces().map(function (p) {
+        return '<li><button class="row" data-act="detail" data-id="' + p.id + '"><span class="em" aria-hidden="true">' + p.emoji + "</span>" +
+          '<span class="tx"><b>' + esc(p.name) + "</b><small>" + esc(p.area) + (L.hasCoords(p) ? "" : " · chưa có vị trí") + "</small></span></button></li>";
+      }).join("") + "</ul>";
+    }
+
     var any = false, groups = "";
-    places().forEach(function (p) {
+    ALL.forEach(function (p) {
       var ls = linksFor(p.id);
       if (!ls.length) return;
       any = true;
       groups += '<h4 class="grp"><button data-act="detail" data-id="' + p.id + '">' + p.emoji + " " + esc(p.name) + " (" + ls.length + ")</button></h4>" + ls.map(linkRow).join("");
     });
-    out += '<h3 class="sec">Link đã lưu</h3>' + (any ? groups : '<div class="empty"><div class="big">📎</div><p>Chưa có link nào. Dán link đầu tiên ở trên nhé.</p></div>');
-    if (S.links.length) {
-      out += '<h3 class="sec">Lưu vĩnh viễn vào GitHub</h3><div class="live-note">Link trên máy này sẽ mất nếu xóa dữ liệu trình duyệt. Muốn giữ lâu dài và cho cả nhóm cùng thấy, chép đoạn code rồi dán vào <code>data/curated.js</code> trong repo.</div>' +
+    if (any) out += '<h3 class="sec">Link review cho địa điểm có sẵn</h3>' + groups;
+    if (S.links.some(function (l) { return !!ALL.filter(function (p) { return p.id === l.place; })[0]; })) {
+      out += '<div class="live-note">Link review lưu trên máy này. Muốn giữ lâu dài cho cả nhóm, chép đoạn code rồi dán vào <code>data/curated.js</code> trong repo.</div>' +
         '<div class="btn-row"><button class="btn ghost" data-act="copycurated">Chép đoạn code curated.js</button></div>';
     }
     return out;
@@ -243,8 +363,10 @@
   /* ---------- Giao diện: khung ---------- */
   function render() {
     var app = $("#app");
+    var mm = $("#main");
+    var keepScroll = mm && lastTab === tab ? mm.scrollTop : 0;
     var view = tab === "swipe" ? viewSwipe() : tab === "top" ? viewTop() : tab === "plan" ? viewPlan() : tab === "links" ? viewLinks() : viewNear();
-    var tabs = [["swipe", "👆", "Vuốt"], ["top", "🏆", "Top"], ["plan", "🗓️", "Lịch"], ["near", "📍", "Gần bạn"], ["links", "📎", "Link"]];
+    var tabs = [["swipe", "👆", "Vuốt"], ["top", "🏆", "Top"], ["plan", "🗓️", "Lịch"], ["near", "📍", "Gần bạn"], ["links", "➕", "Thêm"]];
     app.innerHTML =
       '<header class="hdr"><div class="brand">BKK <b>Swipe</b></div>' +
       '<span class="pill">' + esc(fmtDate(C.trip.start) + "–" + fmtDate(C.trip.end)) + " · " + C.trip.people + ' người</span>' +
@@ -254,6 +376,9 @@
       tabs.map(function (t) {
         return '<button data-act="tab" data-tab="' + t[0] + '"' + (tab === t[0] ? ' aria-current="page"' : "") + '><span class="ic" aria-hidden="true">' + t[1] + "</span>" + t[2] + "</button>";
       }).join("") + "</nav>";
+    var m2 = $("#main");
+    if (m2) m2.scrollTop = keepScroll;
+    lastTab = tab;
     if (tab === "swipe") bindSwipe();
     if (openKind) renderSheet(true);
   }
@@ -281,7 +406,7 @@
       '<div class="card-body"><div class="chips">' + p.cats.map(function (c) { return '<span class="chip">' + esc(CAT_VI[c]) + "</span>"; }).join("") + "</div>" +
       "<h2>" + esc(p.name) + "</h2>" +
       '<p class="blurb">' + esc(p.blurb) + "</p>" +
-      '<div class="meta"><span>🕒 ' + esc(p.hours) + "</span><span>💸 " + PRICE[p.price] + "</span>" + rating + "</div>" +
+      '<div class="meta"><span>🕒 ' + esc(p.hours) + "</span>" + (p.price ? "<span>💸 " + PRICE[p.price] + "</span>" : "") + rating + "</div>" +
       (distText(p) ? '<div class="dist">' + esc(distText(p)) + "</div>" : "") +
       (p.warn ? '<div class="warn">⚠️ ' + esc(p.warn) + "</div>" : "") +
       '<button class="more" data-act="detail" data-id="' + p.id + '">Chi tiết, review mới nhất, chỉ đường ›</button></div></article>';
@@ -419,7 +544,7 @@
       var prev = null, lastSlot = null;
       items.forEach(function (it) {
         if (it.s !== lastSlot) { out += '<div class="slot-label">' + SLOT_VI[it.s] + "</div>"; lastSlot = it.s; }
-        if (prev) {
+        if (prev && L.hasCoords(prev) && L.hasCoords(it.p)) {
           var km = L.haversine(prev, it.p);
           out += '<div class="hop">↓ ' + km.toFixed(1) + " km · ~" + L.estimateMinutes(km, S.mode) + " phút " + MODE_VI[S.mode] + "</div>";
         }
@@ -456,7 +581,9 @@
     }
     out += modeSeg() + '<div class="live-note">Xuất phát từ ' + esc(o.label) + ". Thời gian là ước tính, giao thông Bangkok khó đoán.</div>";
 
-    var liked = likedIds().map(byId);
+    var likedAll = likedIds().map(byId);
+    var liked = likedAll.filter(L.hasCoords);
+    var noPos = likedAll.length - liked.length;
     out += '<h3 class="sec">Tuyến ngắn nhất qua các điểm đã thích</h3>';
     if (liked.length < 2) {
       out += '<div class="banner">Thích ít nhất 2 địa điểm để app tính tuyến ngắn nhất.</div>';
@@ -476,13 +603,15 @@
       out += many + '<div class="btn-row"><a class="btn" target="_blank" rel="noopener" href="' + esc(dirUrl(route.slice(0, 9), route.length > 1 ? "driving" : S.mode)) + '">Mở cả tuyến trong Google Maps</a></div>';
     }
 
+    if (noPos) out += '<div class="banner warn">' + noPos + " địa điểm bạn thích chưa có vị trí nên chưa nằm trong tuyến. Mở chi tiết địa điểm để dán tọa độ.</div>";
     out += '<h3 class="sec">Tất cả địa điểm theo khoảng cách</h3>' + chipsRow();
     var list = places().filter(function (p) { return cat === "all" || p.cats.indexOf(cat) !== -1; })
-      .map(function (p) { return { p: p, km: L.haversine(o, p) }; })
-      .sort(function (a, b) { return a.km - b.km; });
+      .map(function (p) { return { p: p, km: L.hasCoords(p) ? L.haversine(o, p) : null }; })
+      .sort(function (a, b) { return (a.km == null) - (b.km == null) || a.km - b.km; });
     out += '<ul class="list">' + list.map(function (x) {
+      var sub = x.km == null ? "Chưa có vị trí" : x.km.toFixed(1) + " km · ~" + L.estimateMinutes(x.km, S.mode) + " phút " + MODE_VI[S.mode];
       return '<li><button class="row" data-act="detail" data-id="' + x.p.id + '"><span class="em" aria-hidden="true">' + x.p.emoji + "</span>" +
-        '<span class="tx"><b>' + esc(x.p.name) + "</b><small>" + x.km.toFixed(1) + " km · ~" + L.estimateMinutes(x.km, S.mode) + " phút " + MODE_VI[S.mode] + "</small></span></button></li>";
+        '<span class="tx"><b>' + esc(x.p.name) + "</b><small>" + sub + "</small></span></button></li>";
     }).join("") + "</ul>";
     return out;
   }
@@ -526,8 +655,9 @@
       '<div class="chips">' + p.cats.map(function (c) { return '<span class="chip">' + esc(CAT_VI[c]) + "</span>"; }).join("") + "</div>" +
       "<p>" + esc(p.blurb) + "</p>" +
       (p.warn ? '<div class="warn">⚠️ ' + esc(p.warn) + "</div>" : "") +
-      '<dl class="kv"><dt>Khu vực</dt><dd>' + esc(p.area) + "</dd><dt>Di chuyển</dt><dd>" + esc(p.transit) + "</dd><dt>Giờ mở cửa</dt><dd>" + esc(p.hours) +
-      "</dd><dt>Mức giá</dt><dd>" + PRICE[p.price] + " · " + esc(p.priceNote) + " <small>(ước tính)</small></dd></dl>" +
+      '<dl class="kv"><dt>Khu vực</dt><dd>' + esc(p.area) + "</dd>" + (p.transit ? "<dt>Di chuyển</dt><dd>" + esc(p.transit) + "</dd>" : "") +
+      "<dt>Giờ mở cửa</dt><dd>" + esc(p.hours) + "</dd>" +
+      (p.price ? "<dt>Mức giá</dt><dd>" + PRICE[p.price] + " · " + esc(p.priceNote) + " <small>(ước tính)</small></dd>" : "") + "</dl>" + customBlock(p) +
       (tips ? '<h3 class="sec">Mẹo</h3><ul class="tips">' + tips + "</ul>" : "") +
       '<h3 class="sec">Chỉ đường</h3>' + modeSeg() +
       (distText(p) ? '<div class="dist">' + esc(distText(p)) + "</div>" : '<div class="live-note">Bật vị trí ở mục Gần bạn hoặc nhập khách sạn ở Cài đặt để xem khoảng cách. Google Maps vẫn tự lấy vị trí của bạn.</div>') +
@@ -614,14 +744,56 @@
         addMember(m); toast("Đã thêm lựa chọn của " + m.n + "."); render(); break;
       }
       case "rmmember": S.members.splice(Number(d.i), 1); save(); render(); break;
-      case "gotoadd": linkPlace = d.id; closeSheet(); tab = "links"; render(); $("#main").scrollTop = 0; break;
+      case "gotoadd": linkPlace = d.id; formMode = "review"; closeSheet(); tab = "links"; render(); $("#main").scrollTop = 0; break;
+      case "formmode": formMode = d.mode; render(); break;
+      case "newcat": newCat = d.cat; render(); break;
+      case "addplace": {
+        var pv2 = L.parseVideoLink($("#linkUrl").value);
+        if (!pv2) { toast("Link không hợp lệ. Chỉ nhận link TikTok, YouTube hoặc Facebook."); break; }
+        var nm = $("#newName").value.replace(/[<>]/g, "").trim().slice(0, 60);
+        if (!nm) { toast("Hãy nhập tên địa điểm (app chưa tự đọc được tên quán từ video)."); $("#newName").focus(); break; }
+        var locRaw = $("#newLoc").value.trim();
+        var cc = null;
+        if (locRaw) {
+          cc = L.parseCoords(locRaw);
+          if (!cc || !inThailand(cc.lat, cc.lng)) { toast("Không đọc được vị trí. Dán tọa độ dạng 13.75, 100.50 hoặc link Google Maps dài (không phải link rút gọn)."); break; }
+        }
+        var res = addCustom({ pv: pv2, name: nm, cat: newCat, coords: cc, note: $("#newNote").value, by: S.name || "Tôi" });
+        if (res.dup) { toast("Link này đã được thêm thành địa điểm “" + res.dup.name + "” rồi."); break; }
+        S.votes[res.place.id] = 1; // người thêm chắc chắn thích nơi này
+        formVals = { url: "", name: "", loc: "", note: "", title: "" };
+        save(); render();
+        toast("Đã thêm “" + nm + "” vào danh sách và tự đánh dấu thích. Bạn bè sẽ thấy khi nhận link chia sẻ của bạn.");
+        if (res.link) autoTitle(res.link);
+        if (!cc) geocode(res.place.id);
+        break;
+      }
+      case "setcoords": {
+        var cc2 = L.parseCoords($("#cuCoords").value);
+        var cp = S.custom.filter(function (x) { return x.id === d.id; })[0];
+        if (!cc2 || !inThailand(cc2.lat, cc2.lng) || !cp) { toast("Không đọc được vị trí. Dán tọa độ dạng 13.75, 100.50."); break; }
+        cp.lat = cc2.lat; cp.lng = cc2.lng; cp.exact = true; save(); render(); toast("Đã lưu vị trí."); break;
+      }
+      case "rmplace":
+        if (delArmedId !== d.id) {
+          delArmedId = d.id; render(); toast("Bấm thêm một lần nữa trong 4 giây để xóa địa điểm này.");
+          setTimeout(function () { if (delArmedId === d.id) { delArmedId = null; if (openKind === "place") render(); } }, 4000);
+        } else {
+          delArmedId = null;
+          S.custom = S.custom.filter(function (x) { return x.id !== d.id; });
+          S.links = S.links.filter(function (l) { return l.place !== d.id; });
+          delete S.votes[d.id];
+          save(); closeSheet(); render(); toast("Đã xóa địa điểm.");
+        }
+        break;
       case "addlink": {
         var pv = L.parseVideoLink($("#linkUrl").value);
         if (!pv) { toast("Link không hợp lệ. Chỉ nhận link TikTok, YouTube hoặc Facebook."); break; }
         linkPlace = $("#linkPlaceSel").value;
         var entry = pushLink(linkPlace, pv, $("#linkTitle").value, S.name || "Tôi", true);
         if (!entry) { toast("Link này đã có ở địa điểm đó rồi."); break; }
-        save(); render(); toast("Đã thêm link " + PLAT[pv.type].vi + ". Xem ở mục Link đã lưu bên dưới.");
+        formVals.url = ""; formVals.title = "";
+        save(); render(); toast("Đã thêm link " + PLAT[pv.type].vi + ". Xem ở mục Link review bên dưới.");
         var added = document.getElementById("lk-" + entry.lid);
         if (added) {
           added.classList.add("flash");
@@ -659,13 +831,13 @@
     if (e.target.id === "minVotes") { S.minVotes = Number(e.target.value); save(); render(); }
     if (e.target.id === "linkPlaceSel") linkPlace = e.target.value;
   });
+  var FIELD_KEY = { linkUrl: "url", newName: "name", newLoc: "loc", newNote: "note", linkTitle: "title" };
   document.addEventListener("input", function (e) {
+    var k = FIELD_KEY[e.target.id];
+    if (k) formVals[k] = e.target.value;
     if (e.target.id !== "linkUrl") return;
     var hint = $("#linkHint");
-    var v = e.target.value.trim();
-    if (!v) { hint.textContent = ""; return; }
-    var pv = L.parseVideoLink(v);
-    hint.textContent = pv ? "✅ Nhận diện: " + PLAT[pv.type].vi : "⚠️ Chưa nhận ra link TikTok, YouTube hoặc Facebook.";
+    if (hint) hint.textContent = hintFor(e.target.value);
   });
   document.addEventListener("keydown", function (e) {
     if (e.key === "Escape" && openKind) { closeSheet(); return; }

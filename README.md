@@ -46,14 +46,16 @@ Ba nền tảng khác nhau nhiều về mức độ cho lấy dữ liệu, nên 
 
 **TikTok và Facebook:** không có API công khai để tìm bài của người lạ, và việc cào dữ liệu vi phạm điều khoản. Cách làm ổn là cả nhóm tự thêm link bài hay (xem mục dưới).
 
-## Thêm link TikTok / YouTube
+## Thêm địa điểm từ link TikTok / YouTube
 
-Mở tab **Link** (📎), dán link (dán cả đoạn chữ chia sẻ kèm link cũng được), chọn địa điểm rồi bấm **Thêm link**. Hoặc mở chi tiết một địa điểm và bấm **➕ Thêm link**.
+Thấy một quán hay chỗ chụp ảnh trong video? Mở tab **Thêm** (➕), dán link (dán cả đoạn chữ chia sẻ kèm link cũng được), nhập **tên địa điểm**, chọn loại rồi bấm **Thêm vào danh sách vuốt**. Địa điểm mới xuất hiện như mọi địa điểm khác: vuốt chọn, vào Top nhóm, xếp lịch, chỉ đường. Người thêm tự động được tính là thích.
 
-- App chỉ nhận link `https` của TikTok, YouTube, Facebook; tự bỏ tham số theo dõi, link YouTube được chuẩn hóa và hiện ảnh thumbnail.
-- Sau khi thêm, app cố tự điền tiêu đề qua oEmbed của TikTok/YouTube (có thể không được, khi đó link vẫn dùng bình thường và bạn tự ghi chú).
-- Link lưu trên máy bạn. Khi bấm **Chia sẻ lựa chọn của tôi** ở tab Top, link của bạn đi kèm theo link/mã, bạn bè mở lên sẽ thấy link của bạn ở đúng địa điểm.
-- Muốn lưu vĩnh viễn cho cả nhóm: ở tab Link bấm **Chép đoạn code curated.js**, dán vào `data/curated.js` trong repo rồi commit.
+- **Tên địa điểm:** app chưa tự đọc được tên quán từ video (TikTok không cho), nên bạn nhập tay.
+- **Vị trí:** bỏ trống thì app tự tìm gần đúng theo tên bằng OpenStreetMap Nominatim (tên địa điểm được gửi tới dịch vụ này). Nếu muốn chính xác, dán tọa độ hoặc link Google Maps **dài** (link rút gọn `maps.app.goo.gl` không chứa tọa độ). Địa điểm chưa có vị trí vẫn vào danh sách, chỉ là chưa tính được khoảng cách. Mở chi tiết địa điểm để bổ sung vị trí sau.
+- **Link:** app chỉ nhận link `https` của TikTok, YouTube, Facebook, tự bỏ tham số theo dõi. Cùng một link không tạo hai địa điểm. App cố tự điền tiêu đề video qua oEmbed của TikTok/YouTube (có thể không được).
+- **Chia sẻ cho nhóm:** địa điểm và link bạn thêm đi kèm khi bấm **Chia sẻ lựa chọn của tôi** ở tab Top. Bạn bè mở link sẽ thấy các địa điểm đó trong danh sách vuốt của họ. Dữ liệu nhận từ người khác luôn được kiểm tra lại.
+- **Chỉ gắn review cho nơi có sẵn:** chuyển sang "Review cho nơi có sẵn" trong tab Thêm. Muốn lưu lâu dài các review này cho cả nhóm, bấm "Chép đoạn code curated.js" rồi dán vào `data/curated.js`.
+- **Lưu ở đâu:** địa điểm tự thêm lưu trên điện thoại (và đi theo link chia sẻ), chưa nằm trong `data/places.js` của repo.
 
 ## Gộp lựa chọn cả nhóm
 

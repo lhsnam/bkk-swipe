@@ -121,6 +121,16 @@ t("parseVideoLink: nhận diện, làm sạch và từ chối link lạ", () => 
   }
 });
 
+t("buildPlan: địa điểm chưa có tọa độ vẫn được xếp, không sinh NaN", () => {
+  const days = L.buildDays(trip);
+  const noPos = { id: "u-x", name: "X", cats: ["food"], slots: ["evening"], lat: null, lng: null, score: 1 };
+  const { plan, unplaced } = L.buildPlan([noPos, { ...P.find((p) => p.id === "yaowarat"), score: 1 }], days);
+  assert.equal(unplaced.length, 0);
+  assert.equal(plan.flatMap((d) => Object.values(d.slots).flat()).length, 2);
+  assert.equal(L.hasCoords(noPos), false);
+  assert.equal(L.hasCoords(P[0]), true);
+});
+
 t("mapsDirUrl & reviewLinks", () => {
   const u = L.mapsDirUrl({ origin: "13.7,100.5", stops: ["A Bangkok", "B Bangkok", "C Bangkok"], mode: "driving" });
   assert.match(u, /^https:\/\/www\.google\.com\/maps\/dir\/\?api=1/);

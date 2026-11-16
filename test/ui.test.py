@@ -29,12 +29,19 @@ with sync_playwright() as p:
         u = route.request.url
         if "oembed" in u:
             route.fulfill(status=200, content_type="application/json", headers={"access-control-allow-origin": "*"}, body=json.dumps({"title": "Tiêu đề tự lấy <b>x</b>"}))
+        elif "nominatim" in u:
+            import urllib.parse
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(u).query).get("q", [""])[0]
+            body = json.dumps([{"lat": "13.7466", "lon": "100.5393"}] if "Tìm Được" in q else [])
+            route.fulfill(status=200, content_type="application/json", headers={"access-control-allow-origin": "*"}, body=body)
         elif "ytimg.com" in u:
             route.fulfill(status=200, content_type="image/png", body=PNG)
         else:
             route.abort()
     page.route(re.compile(r"^https?://(?!127\.0\.0\.1)"), ext)
     logs = []
+    def state():
+        return json.loads(page.evaluate("localStorage.getItem('bkkswipe.v1')"))
     page.on("console", lambda m: logs.append(m.text) if m.type in ("error", "warning") else None)
     page.on("pageerror", lambda e: logs.append("PAGEERROR " + str(e)))
     page.goto(URL)
@@ -124,6 +131,7 @@ with sync_playwright() as p:
     page.click("[data-tab=links]")
     page.wait_for_selector("#linkUrl")
     page.screenshot(path=f"{OUT}/7-links-empty.png")
+    page.click("[data-act=formmode][data-mode=review]")
     page.fill("#linkUrl", "https://example.com/abc")
     check("Chưa nhận ra" in page.inner_text("#linkHint"), "gợi ý báo link lạ ngay khi gõ")
     page.click("[data-act=addlink]")
@@ -190,6 +198,101 @@ with sync_playwright() as p:
     check(True, "xóa link hoạt động")
     check("curated.js" in page.inner_text("main"), "có hướng dẫn lưu vĩnh viễn vào data/curated.js")
 
+    # ----- thêm ĐỊA ĐIỂM MỚI từ link -----
+    page.click("[data-tab=links]")
+    page.click("[data-act=formmode][data-mode=new]")
+    page.fill("#linkUrl", "https://www.tiktok.com/@naydidaunhi/video/7704723121135275284?is_from_webapp=1&sender_device=pc")
+    page.click("[data-act=addplace]")
+    check("tên địa điểm" in page.inner_text("#toast"), "thiếu tên địa điểm thì nhắc, không thêm")
+    check(state()["custom"] == [], "chưa nhập tên thì không tạo địa điểm")
+    page.fill("#newName", "Quán Thử Nghiệm")
+    page.click("[data-act=newcat][data-cat=night]")
+    check(page.input_value("#newName") == "Quán Thử Nghiệm" and "tiktok.com" in page.input_value("#linkUrl"), "đổi loại không làm mất chữ đã gõ")
+    page.fill("#newLoc", "https://maps.app.goo.gl/abc")
+    page.click("[data-act=addplace]")
+    check("Không đọc được vị trí" in page.inner_text("#toast") and state()["custom"] == [], "link Maps rút gọn bị từ chối rõ ràng, không tạo địa điểm")
+    page.fill("#newLoc", "13.7500, 100.5000")
+    page.fill("#newNote", "Chợ đêm ngon")
+    page.click("[data-act=addplace]")
+    page.wait_for_selector("text=Địa điểm đã thêm từ link (1)")
+    st = state()
+    c0 = st["custom"][0]
+    check(c0["name"] == "Quán Thử Nghiệm" and c0["cat"] == "night" and c0["exact"] and c0["lat"] == 13.75, "tạo địa điểm mới đúng tên, loại, vị trí")
+    pid = c0["id"]
+    check(pid.startswith("u-") and st["votes"].get(pid) == 1, "địa điểm mới có mã u-… và được tự đánh dấu thích")
+    check(any(l["place"] == pid and l["url"].endswith("7704723121135275284") for l in st["links"]), "link TikTok gắn vào địa điểm mới (đã bỏ tham số theo dõi)")
+    page.fill("#linkUrl", "https://www.tiktok.com/@naydidaunhi/video/7704723121135275284")
+    page.fill("#newName", "Tên khác")
+    page.click("[data-act=addplace]")
+    check("đã được thêm" in page.inner_text("#toast") and len(state()["custom"]) == 1, "cùng một link không tạo địa điểm thứ hai")
+
+    page.click("[data-tab=top]")
+    check("Quán Thử Nghiệm" in page.inner_text("main"), "địa điểm mới hiện trong Top nhóm")
+    page.click("button[data-act=detail][data-id=%s]" % pid)
+    page.wait_for_selector(".sheet")
+    sheet_txt = page.inner_text(".sheet")
+    check("Thêm bởi" in sheet_txt and "Xóa địa điểm này" in sheet_txt and "Chợ đêm ngon" in sheet_txt, "chi tiết địa điểm mới có người thêm, ghi chú, nút xóa")
+    hrefs = page.eval_on_selector_all(".sheet a", "els => els.map(e => e.href)")
+    check(any("tiktok.com/@naydidaunhi/video" in h for h in hrefs), "chi tiết có link video TikTok gốc")
+    check(any("google.com/maps/dir" in h and "13.75%2C100.5" in h for h in hrefs), "chỉ đường dùng đúng tọa độ đã nhập")
+    page.keyboard.press("Escape")
+
+    # địa điểm không tìm ra vị trí
+    page.click("[data-tab=links]")
+    page.fill("#linkUrl", "https://youtu.be/abcdefghijk")
+    page.fill("#newName", "Quán Không Có Vị Trí")
+    page.click("[data-act=addplace]")
+    page.wait_for_selector("text=Địa điểm đã thêm từ link (2)")
+    page.wait_for_timeout(600)
+    c1 = state()["custom"][1]
+    check(c1["lat"] is None and "chưa có vị trí" in page.inner_text("main"), "không tìm được vị trí thì vẫn thêm, ghi rõ 'chưa có vị trí'")
+
+    # địa điểm tự tìm được vị trí theo tên
+    page.fill("#linkUrl", "https://www.tiktok.com/@a/video/111222333")
+    page.fill("#newName", "Quán Tìm Được Vị Trí")
+    page.click("[data-act=addplace]")
+    page.wait_for_function("(() => { const s = JSON.parse(localStorage.getItem('bkkswipe.v1')); const c = s.custom.find(x => x.name.includes('Tìm Được')); return c && c.lat !== null; })()")
+    c2 = [c for c in state()["custom"] if "Tìm Được" in c["name"]][0]
+    check(abs(c2["lat"] - 13.7466) < 1e-6 and c2["exact"] is False, "tự tìm vị trí theo tên, đánh dấu là gần đúng")
+
+    # lịch vẫn chạy khi có địa điểm không có tọa độ
+    page.click("[data-tab=plan]")
+    page.wait_for_selector(".day")
+    page.select_option("#minVotes", "1")  # nhóm đã có nhiều thành viên: hạ ngưỡng để thấy địa điểm chỉ mình thích
+    page.wait_for_selector(".day")
+    check("Quán Không Có Vị Trí" in page.inner_text("main"), "lịch xếp được cả địa điểm chưa có vị trí, không bị lỗi")
+
+    # chia sẻ: nhận địa điểm tự thêm từ bạn bè, loại bỏ dữ liệu xấu
+    payload = {"n": "Hùng", "l": ["u-friend1", "mbk"], "k": [["u-friend1", "https://www.tiktok.com/@h/video/999", "Review của Hùng"]],
+               "c": [{"id": "u-friend1", "n": "<img src=x onerror=alert(1)>Quán của Hùng", "c": "food", "la": 13.7, "ln": 100.5, "x": 1, "t": "ngon <b>lắm</b>"},
+                     {"id": "BAD ID!", "n": "Sai id", "c": "food"},
+                     {"id": "u-badcat1", "n": "Sai loại", "c": "hack"},
+                     {"id": "u-farpos1", "n": "Vị trí vô lý", "c": "shop", "la": 91, "ln": 500, "x": 1}]}
+    friend = "BKK1." + page.evaluate("p => btoa(unescape(encodeURIComponent(JSON.stringify(p))))", payload)
+    page.click("[data-tab=top]")
+    page.fill("#importBox", friend)
+    page.click("[data-act=import]")
+    st = state()
+    ids = [c["id"] for c in st["custom"]]
+    check("u-friend1" in ids and "u-farpos1" in ids and "BAD ID!" not in ids and "u-badcat1" not in ids, "chỉ nhận địa điểm hợp lệ từ bạn bè")
+    fr = [c for c in st["custom"] if c["id"] == "u-friend1"][0]
+    check("<" not in fr["name"] and "<" not in fr["note"] and fr["by"] == "Hùng" and fr["mine"] is False, "tên/ghi chú được làm sạch, ghi đúng người thêm")
+    far = [c for c in st["custom"] if c["id"] == "u-farpos1"][0]
+    check(far["lat"] is None, "tọa độ vô lý bị bỏ")
+    check(any(l["place"] == "u-friend1" for l in st["links"]), "link của bạn bè gắn đúng vào địa điểm của họ")
+    check(page.locator("main img[onerror]").count() == 0, "không chèn được HTML từ tên địa điểm")
+    top_txt = page.inner_text("main")
+    check("Quán của Hùng" in top_txt and "1/4 người thích" in top_txt, "phiếu thích của bạn bè cho địa điểm tự thêm được tính vào Top (1/4 người)")
+
+    # xóa địa điểm (2 bước)
+    page.click("button[data-act=detail][data-id=%s]" % pid)
+    page.wait_for_selector(".sheet")
+    page.click("[data-act=rmplace]")
+    check(pid in [c["id"] for c in state()["custom"]], "bấm xóa lần đầu chỉ xin xác nhận")
+    page.click("[data-act=rmplace]")
+    st = state()
+    check(pid not in [c["id"] for c in st["custom"]] and pid not in st["votes"] and not any(l["place"] == pid for l in st["links"]), "xóa địa điểm xóa luôn phiếu và link của nó")
+
     # cài đặt: tọa độ khách sạn
     page.click("[data-act=settings]")
     page.fill("#setHotel", "https://maps.app.goo.gl/f8DfC1i9sAMK4BBA8")
@@ -199,6 +302,11 @@ with sync_playwright() as p:
     page.click("[data-act=savesettings]")
     saved = json.loads(page.evaluate("localStorage.getItem('bkkswipe.v1')"))
     check(saved["hotel"] and abs(saved["hotel"]["lat"] - 13.7563) < 1e-6, "lưu tọa độ khách sạn")
+
+    page.click("[data-tab=near]")
+    page.wait_for_selector("text=Tất cả địa điểm theo khoảng cách")
+    near = page.inner_text("main")
+    check("Chưa có vị trí" in near and "Quán Không Có Vị Trí" in near, "Gần bạn: địa điểm chưa có vị trí xếp cuối, ghi rõ")
 
     # không bị tràn ngang
     overflow = page.evaluate("document.documentElement.scrollWidth > window.innerWidth + 1")
