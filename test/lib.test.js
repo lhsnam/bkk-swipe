@@ -141,4 +141,22 @@ t("mapsDirUrl & reviewLinks", () => {
   assert.match(r.youtube, /sp=CAI%253D/);
 });
 
+t("extractPlaces: tách địa điểm từ caption/mô tả", () => {
+  const txt = "Best pad thai! 📍 Thip Samai Pad Thai - Maha Chai Rd #bangkok #fyp #thipsamai\nThen Wat Arun at sunset, Rooftop Bar at Octave. Maps: https://www.google.com/maps/@13.7,100.5,15z";
+  const r = L.extractPlaces(txt, { names: { watarun: "Wat Arun (Chùa Bình Minh)" } });
+  const names = r.map((x) => x.name);
+  assert.ok(names.includes("Thip Samai Pad Thai"), "tên sau 📍");
+  assert.equal(names.filter((n) => /thip\s?samai/i.test(n)).length, 1, "không lặp #thipsamai");
+  const k = r.find((x) => x.known === "watarun");
+  assert.ok(k && k.name.startsWith("Wat Arun"), "nhận ra địa điểm có sẵn");
+  assert.ok(!names.some((n) => /^(bangkok|fyp)$/i.test(n)), "bỏ hashtag chung chung");
+  assert.equal(L.extractPlaces("", {}).length, 0);
+  assert.equal(L.extractPlaces("hôm nay trời đẹp quá", {}).length, 0);
+  assert.equal(L.guessCat("Octave Rooftop Bar"), "sky");
+  assert.equal(L.guessCat("Talad Night Market"), "night");
+  const c = L.extractPlaces("📍 Quán X 13.7500, 100.5000");
+  assert.ok(c[0].coords && Math.abs(c[0].coords.lat - 13.75) < 1e-9, "đọc tọa độ cùng dòng");
+  assert.ok(L.extractPlaces("📍 " + "A".repeat(500)).every((x) => x.name.length <= 60));
+});
+
 console.log("\nTất cả " + n + " nhóm test đạt.");

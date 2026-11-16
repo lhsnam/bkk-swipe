@@ -74,3 +74,10 @@ Mỗi người vuốt trên máy mình. Ở tab **Top nhóm** bấm **Chia sẻ 
 node test/lib.test.js        # logic: khoảng cách, tuyến ngắn nhất, xếp lịch
 python3 -I test/ui.test.py   # giao diện trên Chrome giả lập điện thoại (cần playwright)
 ```
+
+
+## Phân tích video để tìm địa điểm
+
+Trong tab **Thêm**, dán link rồi bấm **Phân tích video và tìm địa điểm**. App lấy tiêu đề/caption (qua oEmbed của YouTube/TikTok, nếu nền tảng cho phép) cộng với đoạn chữ bạn dán thêm (mô tả, phụ đề, bình luận), rồi gợi ý tên địa điểm bằng quy tắc đơn giản: dòng có 📍/"Địa chỉ", cụm tên viết hoa có từ như Market/Rooftop/Wat, hashtag riêng, và các địa điểm đã có sẵn trong app. Bạn tick chọn, sửa tên rồi bấm thêm.
+
+Giới hạn: không xem hình, không nghe tiếng, không đọc phụ đề tự động (cần API key và máy chủ). TikTok chỉ cho lấy caption. Kết quả chỉ là gợi ý nên cần kiểm tra.

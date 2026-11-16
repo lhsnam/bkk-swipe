@@ -6,7 +6,7 @@
   var ALL = window.BKK_PLACES;
 
   // Nếu trình duyệt giữ lẫn file cũ và mới (bộ nhớ đệm), báo rõ thay vì im lặng không chạy.
-  if (!C || !L || !ALL || typeof L.parseVideoLink !== "function") {
+  if (!C || !L || !ALL || typeof L.parseVideoLink !== "function" || typeof L.extractPlaces !== "function") {
     document.getElementById("app").innerHTML =
       '<div style="padding:28px 20px;font-family:system-ui,sans-serif"><h2>Cần tải lại trang</h2>' +
       "<p>Trình duyệt đang giữ một phần bản cũ của BKK Swipe. Bấm nút dưới để tải bản mới nhất.</p>" +
@@ -59,7 +59,8 @@
   var linkPlace = ALL[0].id; // địa điểm đang chọn trong form thêm link
   var formMode = "new"; // "new" = tạo địa điểm mới từ link, "review" = gắn link vào địa điểm có sẵn
   var newCat = "food";
-  var formVals = { url: "", name: "", loc: "", note: "", title: "" };
+  var formVals = { url: "", name: "", loc: "", note: "", title: "", text: "" };
+  var ana = { busy: false, pv: null, cands: null, src: "" }; // kết quả phân tích video
   var delArmedId = null;
   var lastTab = "swipe";
 
@@ -262,7 +263,7 @@
   }
   function customPlaces() { return S.custom.map(toPlace); }
   function addCustom(o) {
-    var id = hashId(o.pv.url);
+    var id = hashId(o.pv.url + "|" + String(o.name).toLowerCase().replace(/\s+/g, " ").trim());
     var dup = S.custom.filter(function (c) { return c.id === id; })[0];
     if (dup) return { dup: dup };
     var c = {
@@ -293,6 +294,65 @@
         }
       }).catch(function () { clearTimeout(timer); });
   }
+
+  /* ---------- Phân tích video: lấy chữ rồi tách tên địa điểm (không cần API key) ---------- */
+  function fetchOembed(pv) {
+    return new Promise(function (resolve) {
+      var ep = pv.type === "youtube" ? "https://www.youtube.com/oembed?format=json&url=" :
+        pv.type === "tiktok" ? "https://www.tiktok.com/oembed?url=" : null;
+      if (!ep || !window.fetch || !window.AbortController) { resolve(""); return; }
+      var ctl = new AbortController();
+      var timer = setTimeout(function () { ctl.abort(); }, 4000);
+      fetch(ep + encodeURIComponent(pv.url), { signal: ctl.signal }).then(function (r) { return r.ok ? r.json() : null; }).then(function (j) {
+        clearTimeout(timer);
+        resolve(j ? [j.title, j.author_name].filter(function (x) { return typeof x === "string"; }).join("\n") : "");
+      }).catch(function () { clearTimeout(timer); resolve(""); });
+    });
+  }
+  function knownNames() {
+    var o = {};
+    ALL.forEach(function (p) { if (!p.custom) o[p.id] = p.name; });
+    return o;
+  }
+  function runAnalyze() {
+    var pv = L.parseVideoLink($("#linkUrl").value);
+    if (!pv) { toast("Hãy dán link TikTok, YouTube hoặc Facebook trước."); return; }
+    var extra = ($("#anText") ? $("#anText").value : "").slice(0, 8000);
+    ana = { busy: true, pv: pv, cands: null, src: "" };
+    render();
+    fetchOembed(pv).then(function (fetched) {
+      var all = (fetched ? fetched + "\n" : "") + extra;
+      var cands = L.extractPlaces(all, { names: knownNames() }).map(function (c) {
+        c.on = c.conf === "high";
+        return c;
+      });
+      ana = { busy: false, pv: pv, cands: cands, src: fetched ? (extra ? "caption/tiêu đề tự lấy + đoạn bạn dán" : "caption/tiêu đề tự lấy") : (extra ? "đoạn bạn dán" : "") };
+      render();
+      if (!cands.length) toast(fetched || extra ? "Chưa tìm thấy tên địa điểm nào. Hãy dán thêm mô tả/phụ đề, hoặc nhập tên tay." : "Không lấy được chữ từ video. Hãy dán caption/mô tả vào ô bên dưới rồi phân tích lại.");
+    });
+  }
+  function anaBlock() {
+    var out = '<h3 class="sec">Phân tích video</h3>' +
+      '<div class="live-note">App lấy tiêu đề/caption của video (nếu nền tảng cho phép) rồi tách tên địa điểm bằng quy tắc đơn giản. Với video không ghi tên quán trong chữ, hãy dán thêm mô tả, phụ đề hoặc bình luận. App <b>không xem hình hay nghe tiếng</b> trong video.</div>' +
+      '<label class="field">Dán thêm caption / mô tả / phụ đề (không bắt buộc)<textarea id="anText" rows="4" maxlength="8000" placeholder="Ví dụ: 📍 Thip Samai Pad Thai, Maha Chai Rd…">' + esc(formVals.text) + "</textarea></label>" +
+      '<button class="btn ghost block" data-act="analyze"' + (ana.busy ? " disabled" : "") + ">" + (ana.busy ? "Đang đọc video…" : "🔍 Phân tích video và tìm địa điểm") + "</button>";
+    if (ana.cands && ana.cands.length) {
+      var n = ana.cands.filter(function (c) { return c.on; }).length;
+      out += '<div class="live-note">Tìm thấy ' + ana.cands.length + " gợi ý từ " + esc(ana.src || "văn bản") + ". Bỏ tick nơi sai, sửa tên nếu cần.</div><ul class=\"list cands\">" +
+        ana.cands.map(function (c, i) {
+          var cats = CATS.filter(function (x) { return x.k !== "all"; }).map(function (x) {
+            return '<option value="' + x.k + '"' + (x.k === c.cat ? " selected" : "") + ">" + x.e + " " + x.vi + "</option>";
+          }).join("");
+          return '<li class="cand"><button class="chip-btn" data-act="candtog" data-i="' + i + '" aria-pressed="' + !!c.on + '" aria-label="Chọn">' + (c.on ? "✓" : "＋") + "</button>" +
+            (c.known
+              ? '<span class="tx"><b>' + esc(c.name) + "</b><small>Đã có sẵn trong app, sẽ gắn link này và đánh dấu thích</small></span>"
+              : '<span class="tx"><input id="cn-' + i + '" maxlength="60" value="' + esc(c.name) + '" aria-label="Tên địa điểm"><select id="cc-' + i + '" aria-label="Loại">' + cats + "</select>" +
+                "<small>" + (c.coords ? "Có tọa độ trong văn bản" : c.conf === "high" ? "Chắc chắn hơn (có ghim/địa chỉ)" : "Gợi ý, hãy kiểm tra") + "</small></span>") +
+            "</li>";
+        }).join("") + '</ul><button class="btn pink block" data-act="addcands"' + (n ? "" : " disabled") + ">➕ Thêm " + n + " địa điểm đã chọn</button>";
+    }
+    return out;
+  }
   function customBlock(p) {
     if (!p.custom) return "";
     var c = S.custom.filter(function (x) { return x.id === p.id; })[0];
@@ -321,14 +381,14 @@
       '<div class="live-note" id="linkHint" aria-live="polite">' + esc(hintFor(formVals.url)) + "</div>";
     if (formMode === "new") {
       out += '<label class="field">Tên địa điểm<input id="newName" maxlength="60" autocomplete="off" value="' + esc(formVals.name) + '" placeholder="Ví dụ: Thip Samai Pad Thai"></label>' +
-        '<div class="live-note">App chưa tự đọc được tên quán từ video, nên bạn nhập tên nhé.</div>' +
+        '<div class="live-note">Biết tên quán thì nhập ở đây. Chưa biết thì kéo xuống bấm “Phân tích video”.</div>' +
         '<div class="field">Loại</div><div class="chips-row wrap" role="group" aria-label="Loại địa điểm">' +
         CATS.filter(function (c) { return c.k !== "all"; }).map(function (c) {
           return '<button class="chip-btn" data-act="newcat" data-cat="' + c.k + '" aria-pressed="' + (newCat === c.k) + '">' + c.e + " " + c.vi + "</button>";
         }).join("") + "</div>" +
         '<label class="field">Vị trí (không bắt buộc)<input id="newLoc" autocomplete="off" value="' + esc(formVals.loc) + '" placeholder="Tọa độ hoặc link Google Maps dài. Bỏ trống để app tự tìm theo tên"></label>' +
         '<label class="field">Ghi chú (không bắt buộc)<input id="newNote" maxlength="120" autocomplete="off" value="' + esc(formVals.note) + '" placeholder="Ví dụ: ngon, xếp hàng 30 phút"></label>' +
-        '<button class="btn pink block" data-act="addplace">➕ Thêm vào danh sách vuốt</button>';
+        '<button class="btn pink block" data-act="addplace">➕ Thêm vào danh sách vuốt</button>' + anaBlock();
     } else {
       var opts = places().filter(function (p) { return !p.custom; }).map(function (p) {
         return '<option value="' + p.id + '"' + (p.id === linkPlace ? " selected" : "") + ">" + p.emoji + " " + esc(p.name) + "</option>";
@@ -747,6 +807,33 @@
       case "gotoadd": linkPlace = d.id; formMode = "review"; closeSheet(); tab = "links"; render(); $("#main").scrollTop = 0; break;
       case "formmode": formMode = d.mode; render(); break;
       case "newcat": newCat = d.cat; render(); break;
+      case "analyze": runAnalyze(); break;
+      case "candtog": { var cd = ana.cands && ana.cands[Number(d.i)]; if (cd) { cd.on = !cd.on; render(); } break; }
+      case "addcands": {
+        if (!ana.cands || !ana.pv) break;
+        var by = S.name || "Tôi", added = [], skipped = 0, geo = [];
+        ana.cands.forEach(function (c) {
+          if (!c.on) return;
+          if (c.known) {
+            if (!S.votes[c.known]) S.votes[c.known] = 1;
+            if (pushLink(c.known, ana.pv, "", by, true)) added.push(c.name); else skipped++;
+            return;
+          }
+          var nm2 = String(c.name).replace(/[<>]/g, "").trim().slice(0, 60);
+          if (nm2.length < 2) { skipped++; return; }
+          var r2 = addCustom({ pv: ana.pv, name: nm2, cat: CAT_E[c.cat] ? c.cat : "food", coords: c.coords && inThailand(c.coords.lat, c.coords.lng) ? c.coords : null, note: "", by: by });
+          if (r2.dup) { skipped++; return; }
+          S.votes[r2.place.id] = 1; added.push(nm2);
+          if (!c.coords) geo.push(r2.place.id);
+        });
+        if (!added.length) { toast(skipped ? "Các địa điểm này đã có rồi." : "Chưa chọn địa điểm nào."); break; }
+        ana = { busy: false, pv: null, cands: null, src: "" };
+        formVals = { url: "", name: "", loc: "", note: "", title: "", text: "" };
+        save(); render();
+        toast("Đã thêm " + added.length + " địa điểm và tự đánh dấu thích." + (skipped ? " Bỏ qua " + skipped + " nơi trùng." : ""));
+        geo.forEach(function (id, i) { setTimeout(function () { geocode(id); }, 1200 * i); }); // Nominatim giới hạn ~1 yêu cầu/giây
+        break;
+      }
       case "addplace": {
         var pv2 = L.parseVideoLink($("#linkUrl").value);
         if (!pv2) { toast("Link không hợp lệ. Chỉ nhận link TikTok, YouTube hoặc Facebook."); break; }
@@ -761,7 +848,7 @@
         var res = addCustom({ pv: pv2, name: nm, cat: newCat, coords: cc, note: $("#newNote").value, by: S.name || "Tôi" });
         if (res.dup) { toast("Link này đã được thêm thành địa điểm “" + res.dup.name + "” rồi."); break; }
         S.votes[res.place.id] = 1; // người thêm chắc chắn thích nơi này
-        formVals = { url: "", name: "", loc: "", note: "", title: "" };
+        formVals = { url: "", name: "", loc: "", note: "", title: "", text: "" };
         save(); render();
         toast("Đã thêm “" + nm + "” vào danh sách và tự đánh dấu thích. Bạn bè sẽ thấy khi nhận link chia sẻ của bạn.");
         if (res.link) autoTitle(res.link);
@@ -830,11 +917,15 @@
   document.addEventListener("change", function (e) {
     if (e.target.id === "minVotes") { S.minVotes = Number(e.target.value); save(); render(); }
     if (e.target.id === "linkPlaceSel") linkPlace = e.target.value;
+    var mc = /^cc-(\d+)$/.exec(e.target.id || "");
+    if (mc && ana.cands && ana.cands[+mc[1]] && CAT_E[e.target.value]) ana.cands[+mc[1]].cat = e.target.value;
   });
-  var FIELD_KEY = { linkUrl: "url", newName: "name", newLoc: "loc", newNote: "note", linkTitle: "title" };
+  var FIELD_KEY = { linkUrl: "url", newName: "name", newLoc: "loc", newNote: "note", linkTitle: "title", anText: "text" };
   document.addEventListener("input", function (e) {
     var k = FIELD_KEY[e.target.id];
     if (k) formVals[k] = e.target.value;
+    var mi = /^cn-(\d+)$/.exec(e.target.id || "");
+    if (mi && ana.cands && ana.cands[+mi[1]]) ana.cands[+mi[1]].name = e.target.value;
     if (e.target.id !== "linkUrl") return;
     var hint = $("#linkHint");
     if (hint) hint.textContent = hintFor(e.target.value);

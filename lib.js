@@ -289,6 +289,98 @@
     return { type, id, url };
   }
 
+  /* ---------- Trích địa điểm từ văn bản (tiêu đề, caption, mô tả, phụ đề) ---------- */
+  const KNOWN_ALIASES = {
+    yaowarat: ["yaowarat", "chinatown", "pho tau"], jayfai: ["jay fai", "jai fai"], jokprince: ["jok prince"],
+    khaosan: ["khao san", "khaosan"], watarun: ["wat arun"], watpho: ["wat pho"], grandpalace: ["grand palace"],
+    benchamabophit: ["benchamabophit", "marble temple"], skywalk: ["mahanakhon", "skywalk"], lebua: ["lebua"],
+    octave: ["octave rooftop", "octave bar"], redsky: ["red sky"], vertigo: ["vertigo", "moon bar"], mbk: ["mbk"],
+    paragon: ["siam paragon"], iconsiam: ["iconsiam", "icon siam"], pratunam: ["pratunam", "platinum fashion"],
+    terminal21: ["terminal 21", "terminal21"], jodd: ["jodd fairs", "jodd fair"],
+    trainratchada: ["train night market", "talad rot fai", "rot fai"], chatuchak: ["chatuchak", "jatujak"], asiatique: ["asiatique"]
+  };
+  const GENERIC_TAGS = new Set(["bangkok", "thailand", "thai", "thailand🇹🇭", "fyp", "foryou", "foryoupage", "viral", "trending", "travel", "food", "foodie", "review", "vlog", "xuhuong", "dulich", "dulichthailand", "dulichbangkok", "thailande", "amthuc", "reviewanuong", "anuong", "streetfood", "shorts", "short", "tiktok", "youtube", "tiktokfood", "tiktoktravel", "traveltiktok", "bkk", "thailandtravel", "bangkokfood", "bangkoktravel", "dulichbuiThailand", "mukbang", "fypシ", "parati"]);
+  const STOP_FIRST = new Set(["the", "this", "that", "my", "our", "we", "i", "bangkok", "thailand", "thai", "day", "best", "top", "how", "what", "where", "here", "new", "free", "full", "watch", "follow", "subscribe", "link", "price", "open", "location", "address", "map", "maps", "google", "instagram", "tiktok", "youtube", "facebook"]);
+  const PLACE_WORDS = /\b(market|night market|rooftop|bar|cafe|café|coffee|restaurant|noodles?|noodle|temple|wat|mall|street|road|soi|kitchen|bakery|pad thai|congee|bistro|garden|palace|tower|hotel|food court|pier|park|museum|shop|house|station)\b/i;
+
+  function fold(s) {
+    return String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/đ/g, "d").replace(/Đ/g, "D").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  }
+  function guessCat(t) {
+    const s = " " + fold(t) + " ";
+    if (/ (rooftop|sky bar|skybar|sky|cocktail|lounge) /.test(s)) return "sky";
+    if (/ (night market|cho dem|rot fai|jodd) /.test(s)) return "night";
+    if (/ (wat|temple|chua|den|palace|cung dien|view|photo|chup anh|museum|bao tang|park|cong vien|pier|tower|garden|vuon) /.test(s)) return "photo";
+    if (/ (mall|market|cho|shopping|mua sam|trung tam|center|centre|platinum|plaza|outlet) /.test(s)) return "shop";
+    return "food";
+  }
+  function cleanName(n) {
+    n = String(n || "").replace(/https?:\/\/\S+/g, " ").replace(/[<>]/g, " ").replace(/[\u{1F000}-\u{1FFFF}☀-➿️‍]/gu, " ")
+      .replace(/^[\s\-–—:|•·*#@"'“”‘’()\[\]]+|[\s\-–—:|•·*"'“”‘’()\[\]]+$/g, "").replace(/\s+/g, " ").trim();
+    return n.slice(0, 60);
+  }
+  function humanizeTag(t) {
+    const m = t.replace(/_/g, " ");
+    return m.charAt(0).toUpperCase() + m.slice(1);
+  }
+
+  /**
+   * Gợi ý các địa điểm có trong một đoạn văn bản. Dựa trên quy tắc đơn giản nên chỉ là GỢI Ý, người dùng cần xác nhận.
+   * Trả về [{ name, cat, known: id|null, coords: {lat,lng}|null, conf: "high"|"low" }].
+   */
+  function extractPlaces(text, opts) {
+    const src = String(text || "").slice(0, 8000);
+    const out = [];
+    const seen = new Set();
+    function push(name, conf, extra) {
+      name = cleanName(name);
+      if (name.length < 3) return;
+      const key = fold(name);
+      if (!key || key.length < 3 || seen.has(key)) return;
+      const ck = key.replace(/ /g, "");
+      const first = key.split(" ")[0];
+      if (STOP_FIRST.has(first) && key.split(" ").length < 3) return;
+      for (const o of out) { const ok = fold(o.name).replace(/ /g, ""); if (ok.indexOf(ck) >= 0 || ck.indexOf(ok) >= 0) return; }
+      seen.add(key);
+      out.push(Object.assign({ name, cat: guessCat(name), known: null, coords: null, conf }, extra || {}));
+    }
+
+    // 1) Địa điểm có sẵn trong app
+    const f = " " + fold(src) + " ";
+    for (const id of Object.keys(KNOWN_ALIASES)) {
+      if (KNOWN_ALIASES[id].some((a) => f.indexOf(" " + a + " ") >= 0)) {
+        const nm = (opts && opts.names && opts.names[id]) || id;
+        const key = "known:" + id;
+        if (!seen.has(key)) { seen.add(key); out.push({ name: nm, cat: guessCat(nm), known: id, coords: null, conf: "high" }); }
+      }
+    }
+    // 2) Dòng có biểu tượng ghim / nhãn địa chỉ
+    const lines = src.split(/\r?\n|(?<=[.!?])\s+(?=[📍📌🏠])/u);
+    for (const raw of lines) {
+      const m = raw.match(/(?:📍|📌|🏠|📮|🗺️?|\b(?:địa chỉ|dia chi|address|location|add|vị trí|vi tri|quán|quan|place|where)\b\s*[:：\-–])\s*(.+)$/iu);
+      if (!m) continue;
+      let seg = m[1].split(/\s[-–—|•]\s|[,;（(]|\s{2,}|#/)[0];
+      const co = parseCoords(raw);
+      push(seg, "high", co && co.lat > 5 && co.lat < 21 && co.lng > 97 && co.lng < 106 ? { coords: co } : null);
+    }
+    // 3) Cụm viết hoa có từ khóa địa điểm, hoặc đứng sau "at / @ / tại / ở / quán"
+    const capSeq = "[A-Z][\\p{L}'&-]*(?:\\s+(?:[A-Z][\\p{L}'&-]*|&|of|the|de|la)){0,4}";
+    const re1 = new RegExp("(?:\\b(?:at|in|to|from|@|tại|ở|quán|tiệm|chợ|nhà hàng|chùa|đền)\\s+)(" + capSeq + ")", "gu");
+    const re2 = new RegExp("\\b(" + capSeq + ")\\b", "gu");
+    let mm;
+    while ((mm = re1.exec(src))) push(mm[1], "low");
+    while ((mm = re2.exec(src))) { if (PLACE_WORDS.test(mm[1]) && mm[1].split(/\s+/).length >= 2) push(mm[1], "low"); }
+    // 4) Hashtag không chung chung
+    const tagRe = /#([\p{L}\p{N}_]{4,30})/gu;
+    while ((mm = tagRe.exec(src))) {
+      const t = mm[1];
+      if (GENERIC_TAGS.has(t.toLowerCase())) continue;
+      if (/^(bangkok|thailand|thai|dulich|review|an|food|travel|vlog)/i.test(t) && t.length < 12) continue;
+      push(humanizeTag(t), "low");
+    }
+    return out.slice(0, 12);
+  }
+
   const api = {
     hasCoords,
     parseVideoLink,
@@ -303,7 +395,10 @@
     buildDays,
     buildPlan,
     mapsDirUrl,
-    reviewLinks
+    reviewLinks,
+    extractPlaces,
+    guessCat,
+    KNOWN_ALIASES
   };
   root.BKK = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;

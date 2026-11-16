@@ -181,3 +181,10 @@ code { background: #2a1a3d14; padding: 1px 5px; border-radius: 6px; font-size: 1
 }
 @media (min-width: 560px) { #app { border-left: 1px solid var(--line); border-right: 1px solid var(--line); } }
 @media (prefers-reduced-motion: reduce) { .card, .sheet { transition: none; animation: none; } }
+
+/* Phân tích video */
+.cands{margin:8px 0}
+.cand{display:flex;gap:10px;align-items:flex-start;padding:8px 0;border-bottom:1px dashed #0002}
+.cand .tx{flex:1;display:flex;flex-direction:column;gap:4px;min-width:0}
+.cand input,.cand select{padding:8px 10px;border:1px solid var(--line);border-radius:10px;background:#fff;width:100%;min-height:40px}
+.btn[disabled]{opacity:.5}
