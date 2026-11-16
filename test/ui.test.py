@@ -23,6 +23,17 @@ with sync_playwright() as p:
     ctx = b.new_context(viewport={"width": 390, "height": 800}, device_scale_factor=2, has_touch=True, is_mobile=True,
                         geolocation={"latitude": 13.7466, "longitude": 100.5393}, permissions=["geolocation"], locale="vi-VN")
     page = ctx.new_page()
+    import re, base64
+    PNG = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==")
+    def ext(route):  # chặn mạng ngoài, giả lập oEmbed và ảnh thumbnail
+        u = route.request.url
+        if "oembed" in u:
+            route.fulfill(status=200, content_type="application/json", headers={"access-control-allow-origin": "*"}, body=json.dumps({"title": "Tiêu đề tự lấy <b>x</b>"}))
+        elif "ytimg.com" in u:
+            route.fulfill(status=200, content_type="image/png", body=PNG)
+        else:
+            route.abort()
+    page.route(re.compile(r"^https?://(?!127\.0\.0\.1)"), ext)
     logs = []
     page.on("console", lambda m: logs.append(m.text) if m.type in ("error", "warning") else None)
     page.on("pageerror", lambda e: logs.append("PAGEERROR " + str(e)))
@@ -108,6 +119,76 @@ with sync_playwright() as p:
     page.goto(URL + "#" + "BKK1." + page.evaluate("btoa(unescape(encodeURIComponent(JSON.stringify({n:'Minh', l:['mbk']}))))"))
     page.wait_for_selector(".rank")
     check("Minh" in page.evaluate("localStorage.getItem('bkkswipe.v1')"), "mở link chia sẻ tự thêm thành viên")
+
+    # ----- mục Link: thêm link TikTok / YouTube -----
+    page.click("[data-tab=links]")
+    page.wait_for_selector("#linkUrl")
+    page.screenshot(path=f"{OUT}/7-links-empty.png")
+    page.fill("#linkUrl", "https://example.com/abc")
+    check("Chưa nhận ra" in page.inner_text("#linkHint"), "gợi ý báo link lạ ngay khi gõ")
+    page.click("[data-act=addlink]")
+    check("không hợp lệ" in page.inner_text("#toast"), "link không phải TikTok/YouTube bị từ chối")
+    check(json.loads(page.evaluate("localStorage.getItem('bkkswipe.v1')")).get("links") == [], "link lạ không được lưu")
+
+    page.fill("#linkUrl", "Xem nè bạn ơi https://youtu.be/dQw4w9WgXcQ?si=tracking123 hay lắm")
+    check("YouTube" in page.inner_text("#linkHint"), "gợi ý nhận ra YouTube từ đoạn chữ chia sẻ")
+    page.select_option("#linkPlaceSel", "watarun")
+    page.fill("#linkTitle", "Hoàng hôn đẹp")
+    page.click("[data-act=addlink]")
+    page.wait_for_selector(".linkrow")
+    st = json.loads(page.evaluate("localStorage.getItem('bkkswipe.v1')"))
+    check(st["links"][0]["url"] == "https://www.youtube.com/watch?v=dQw4w9WgXcQ" and st["links"][0]["place"] == "watarun", "YouTube được chuẩn hóa link, gắn đúng địa điểm")
+    check(page.locator(".linkrow img").count() == 1 and "ytimg.com/vi/dQw4w9WgXcQ" in page.get_attribute(".linkrow img", "src"), "YouTube hiện ảnh thumbnail")
+    check("Hoàng hôn đẹp" in page.inner_text("main"), "hiện tiêu đề do người dùng nhập")
+
+    page.fill("#linkUrl", "https://www.tiktok.com/@foodie/video/7300000000000000000?is_from_webapp=1&sender_device=pc")
+    page.select_option("#linkPlaceSel", "yaowarat")
+    page.click("[data-act=addlink]")
+    page.wait_for_function("document.querySelectorAll('.linkrow').length === 2")
+    page.wait_for_function("document.querySelector('main').innerText.includes('Tiêu đề tự lấy')")  # oEmbed tự điền
+    st = json.loads(page.evaluate("localStorage.getItem('bkkswipe.v1')"))
+    tk = [l for l in st["links"] if l["type"] == "tiktok"][0]
+    check(tk["url"] == "https://www.tiktok.com/@foodie/video/7300000000000000000", "TikTok được bỏ tham số theo dõi")
+    check("<" not in tk["title"], "tiêu đề oEmbed được làm sạch ký tự HTML")
+    check(page.locator("main b >> text=<b>").count() == 0, "tiêu đề không chèn được thẻ HTML")
+
+    page.fill("#linkUrl", "https://www.tiktok.com/@foodie/video/7300000000000000000")
+    page.select_option("#linkPlaceSel", "yaowarat")
+    page.click("[data-act=addlink]")
+    check("đã có" in page.inner_text("#toast"), "link trùng bị báo, không lưu hai lần")
+    page.screenshot(path=f"{OUT}/8-links.png", full_page=True)
+
+    # chi tiết địa điểm hiện link và nút thêm
+    page.click("button[data-act=detail][data-id=watarun]")
+    page.wait_for_selector(".sheet .linkrow")
+    check("Hoàng hôn đẹp" in page.inner_text(".sheet"), "chi tiết địa điểm hiện link của nhóm")
+    page.click("[data-act=gotoadd]")
+    page.wait_for_selector("#linkUrl")
+    check(page.input_value("#linkPlaceSel") == "watarun", "nút ➕ trong chi tiết chọn sẵn đúng địa điểm")
+
+    # chia sẻ: mã của tôi có link; mã bạn bè chứa link độc hại chỉ nhận phần hợp lệ
+    code = page.evaluate("""() => { const t = JSON.parse(localStorage.getItem('bkkswipe.v1')); return t.links.filter(l=>l.mine).length }""")
+    check(code == 2, "2 link của tôi sẽ được kèm khi chia sẻ")
+    payload = {"n": "Lan", "l": ["mbk"], "k": [
+        ["mbk", "https://www.youtube.com/watch?v=abcdefghijk", "Review MBK"],
+        ["mbk", "javascript:alert(1)", "xấu"],
+        ["mbk", "https://tiktok.com.evil.com/@a/video/1", "giả mạo"],
+        ["khong-ton-tai", "https://www.tiktok.com/@a/video/2", "sai id"]]}
+    friend = "BKK1." + page.evaluate("p => btoa(unescape(encodeURIComponent(JSON.stringify(p))))", payload)
+    page.click("[data-tab=top]")
+    page.fill("#importBox", friend)
+    page.click("[data-act=import]")
+    st = json.loads(page.evaluate("localStorage.getItem('bkkswipe.v1')"))
+    imported = [l for l in st["links"] if l["by"] == "Lan"]
+    check(len(imported) == 1 and imported[0]["place"] == "mbk" and not imported[0]["mine"], "chỉ nhận 1 link hợp lệ từ bạn bè, bỏ link độc hại và sai địa điểm")
+
+    # xóa link
+    page.click("[data-tab=links]")
+    n_before = page.locator(".linkrow").count()
+    page.locator("[data-act=rmlink]").first.click()
+    page.wait_for_function(f"document.querySelectorAll('.linkrow').length === {n_before - 1}")
+    check(True, "xóa link hoạt động")
+    check("curated.js" in page.inner_text("main"), "có hướng dẫn lưu vĩnh viễn vào data/curated.js")
 
     # cài đặt: tọa độ khách sạn
     page.click("[data-act=settings]")

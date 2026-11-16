@@ -103,6 +103,24 @@ t("buildPlan: Chatuchak không xếp được nếu chỉ còn ngày thường",
   assert.equal(plan.flatMap((d) => Object.values(d.slots).flat()).length, 0);
 });
 
+t("parseVideoLink: nhận diện, làm sạch và từ chối link lạ", () => {
+  const yt = L.parseVideoLink("https://youtu.be/dQw4w9WgXcQ?si=abc&t=10");
+  assert.deepEqual(yt, { type: "youtube", id: "dQw4w9WgXcQ", url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ" });
+  assert.equal(L.parseVideoLink("https://m.youtube.com/watch?v=dQw4w9WgXcQ&feature=share").id, "dQw4w9WgXcQ");
+  assert.equal(L.parseVideoLink("https://www.youtube.com/shorts/abcDEF12345").id, "abcDEF12345");
+  const tt = L.parseVideoLink("Xem video này nè https://www.tiktok.com/@foodie/video/7300000000000000000?is_from_webapp=1&sender_device=pc #bangkok");
+  assert.deepEqual(tt, { type: "tiktok", id: null, url: "https://www.tiktok.com/@foodie/video/7300000000000000000" });
+  assert.equal(L.parseVideoLink("https://vm.tiktok.com/ZSabc123/").url, "https://vm.tiktok.com/ZSabc123");
+  assert.equal(L.parseVideoLink("tiktok.com/@a/video/1").type, "tiktok");
+  assert.equal(L.parseVideoLink("https://fb.watch/abc123/").type, "facebook");
+  // từ chối
+  for (const bad of ["", null, "hello", "https://example.com/x", "https://evil.com/?u=https://youtube.com/watch?v=aaaaaaaaaaa",
+    "https://tiktok.com.evil.com/@a/video/1", "https://nottiktok.com/@a/video/1", "javascript:alert(1)",
+    "https://user:pw@www.youtube.com/watch?v=dQw4w9WgXcQ", "https://www.tiktok.com/", "ftp://youtube.com/watch?v=dQw4w9WgXcQ"]) {
+    assert.equal(L.parseVideoLink(bad), null, "phải từ chối: " + bad);
+  }
+});
+
 t("mapsDirUrl & reviewLinks", () => {
   const u = L.mapsDirUrl({ origin: "13.7,100.5", stops: ["A Bangkok", "B Bangkok", "C Bangkok"], mode: "driving" });
   assert.match(u, /^https:\/\/www\.google\.com\/maps\/dir\/\?api=1/);

@@ -233,7 +233,60 @@
     };
   }
 
+  const LINK_DOMAINS = {
+    tiktok: ["tiktok.com"],
+    youtube: ["youtube.com", "youtu.be"],
+    facebook: ["facebook.com", "fb.watch"]
+  };
+  function hostType(host) {
+    const h = host.toLowerCase();
+    for (const type in LINK_DOMAINS) {
+      if (LINK_DOMAINS[type].some((d) => h === d || h.endsWith("." + d))) return type;
+    }
+    return null;
+  }
+
+  /**
+   * Nhận diện link review TikTok / YouTube / Facebook. Chấp nhận cả đoạn chữ chia sẻ có kèm link.
+   * Chỉ nhận https của đúng các tên miền này; trả về link đã làm sạch (bỏ tham số theo dõi) hoặc null.
+   */
+  function parseVideoLink(raw) {
+    if (!raw) return null;
+    let s = String(raw).trim();
+    const m = s.match(/https?:\/\/[^\s]+/i);
+    if (m) s = m[0];
+    else if (/^(www\.|m\.|vm\.|vt\.)?(tiktok\.com|youtube\.com|youtu\.be|facebook\.com|fb\.watch)\//i.test(s)) s = "https://" + s;
+    else return null;
+    let u;
+    try { u = new URL(s); } catch (e) { return null; }
+    if (u.protocol !== "https:" && u.protocol !== "http:") return null;
+    if (u.username || u.password) return null;
+    const type = hostType(u.hostname);
+    if (!type) return null;
+    if ((u.pathname === "/" || u.pathname === "") && !u.search) return null; // chỉ là trang chủ
+    let url;
+    let id = null;
+    if (type === "youtube") {
+      const host = u.hostname.toLowerCase();
+      if (host === "youtu.be") id = u.pathname.slice(1).split("/")[0];
+      else if (u.pathname === "/watch") id = u.searchParams.get("v");
+      else {
+        const mm = u.pathname.match(/^\/(shorts|embed|live)\/([\w-]{6,})/);
+        if (mm) id = mm[2];
+      }
+      if (id && /^[\w-]{6,20}$/.test(id)) url = "https://www.youtube.com/watch?v=" + id;
+      else { id = null; url = "https://www.youtube.com" + u.pathname + u.search; }
+    } else if (type === "tiktok") {
+      url = "https://" + u.hostname.toLowerCase() + u.pathname.replace(/\/+$/, "");
+    } else {
+      url = "https://" + u.hostname.toLowerCase() + u.pathname + u.search;
+    }
+    if (url.length > 300) return null;
+    return { type, id, url };
+  }
+
   const api = {
+    parseVideoLink,
     SLOT_ORDER,
     SLOT_CAP,
     haversine,

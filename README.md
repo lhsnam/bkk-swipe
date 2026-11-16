@@ -44,7 +44,16 @@ Ba nền tảng khác nhau nhiều về mức độ cho lấy dữ liệu, nên 
 
    Cách bật: tạo khóa ở Google Cloud, thêm vào **Settings → Secrets and variables → Actions** hai secret `YT_API_KEY` và `GOOGLE_PLACES_KEY`, rồi vào tab **Actions → Cập nhật dữ liệu địa điểm → Run workflow**. Đừng dán khóa vào mã nguồn hay vào chat. Hãy kiểm tra bảng giá và hạn mức miễn phí của Google trước khi bật.
 
-**TikTok và Facebook:** không có API công khai để tìm bài của người lạ, và việc cào dữ liệu vi phạm điều khoản. Cách làm ổn là cả nhóm dán link bài hay vào `data/curated.js`.
+**TikTok và Facebook:** không có API công khai để tìm bài của người lạ, và việc cào dữ liệu vi phạm điều khoản. Cách làm ổn là cả nhóm tự thêm link bài hay (xem mục dưới).
+
+## Thêm link TikTok / YouTube
+
+Mở tab **Link** (📎), dán link (dán cả đoạn chữ chia sẻ kèm link cũng được), chọn địa điểm rồi bấm **Thêm link**. Hoặc mở chi tiết một địa điểm và bấm **➕ Thêm link**.
+
+- App chỉ nhận link `https` của TikTok, YouTube, Facebook; tự bỏ tham số theo dõi, link YouTube được chuẩn hóa và hiện ảnh thumbnail.
+- Sau khi thêm, app cố tự điền tiêu đề qua oEmbed của TikTok/YouTube (có thể không được, khi đó link vẫn dùng bình thường và bạn tự ghi chú).
+- Link lưu trên máy bạn. Khi bấm **Chia sẻ lựa chọn của tôi** ở tab Top, link của bạn đi kèm theo link/mã, bạn bè mở lên sẽ thấy link của bạn ở đúng địa điểm.
+- Muốn lưu vĩnh viễn cho cả nhóm: ở tab Link bấm **Chép đoạn code curated.js**, dán vào `data/curated.js` trong repo rồi commit.
 
 ## Gộp lựa chọn cả nhóm
 

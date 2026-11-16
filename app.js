@@ -25,7 +25,7 @@
   var PRICE = ["", "฿", "฿฿", "฿฿฿"];
 
   /* ---------- Trạng thái ---------- */
-  function defaults() { return { name: "", votes: {}, hotel: null, mode: "transit", members: [], minVotes: 0 }; }
+  function defaults() { return { name: "", votes: {}, hotel: null, mode: "transit", members: [], minVotes: 0, links: [] }; }
   function load() {
     try {
       var s = JSON.parse(localStorage.getItem(KEY));
@@ -44,6 +44,7 @@
   var openId = null;
   var openKind = null; // "place" | "settings"
   var resetArmed = false;
+  var linkPlace = ALL[0].id; // địa điểm đang chọn trong form thêm link
 
   /* ---------- Tiện ích ---------- */
   function esc(s) {
@@ -114,7 +115,8 @@
     return map;
   }
   function myCode() {
-    var o = { n: (S.name || "Tôi").slice(0, 20), l: likedIds() };
+    var k = S.links.filter(function (l) { return l.mine; }).slice(0, 40).map(function (l) { return [l.place, l.url, l.title || ""]; });
+    var o = { n: (S.name || "Tôi").slice(0, 20), l: likedIds(), k: k };
     return "BKK1." + btoa(unescape(encodeURIComponent(JSON.stringify(o))));
   }
   function parseCode(s) {
@@ -124,19 +126,115 @@
       var raw = s.slice(i + 5).trim().replace(/[^A-Za-z0-9+/=_-]+.*$/, "");
       var o = JSON.parse(decodeURIComponent(escape(atob(raw))));
       if (!o || typeof o.n !== "string" || !Array.isArray(o.l)) return null;
-      return { n: o.n.replace(/[<>]/g, "").slice(0, 20) || "Bạn", l: o.l.filter(function (id) { return !!byId(id); }) };
+      var k = (Array.isArray(o.k) ? o.k : []).slice(0, 40).map(function (x) {
+        if (!Array.isArray(x) || !byId(x[0])) return null;
+        var pv = L.parseVideoLink(x[1]); // kiểm tra lại, không tin dữ liệu từ người khác
+        if (!pv) return null;
+        return { place: x[0], url: pv.url, type: pv.type, id: pv.id, title: String(x[2] || "").replace(/[<>]/g, "").slice(0, 80) };
+      }).filter(Boolean);
+      return { n: o.n.replace(/[<>]/g, "").slice(0, 20) || "Bạn", l: o.l.filter(function (id) { return !!byId(id); }), k: k };
     } catch (e) { return null; }
   }
   function addMember(m) {
-    S.members = S.members.filter(function (x) { return x.n !== m.n; }).concat([m]);
+    (m.k || []).forEach(function (x) { pushLink(x.place, L.parseVideoLink(x.url), x.title, m.n, false); });
+    S.members = S.members.filter(function (x) { return x.n !== m.n; }).concat([{ n: m.n, l: m.l }]);
     save();
+  }
+
+  /* ---------- Link review (TikTok / YouTube / Facebook) ---------- */
+  var PLAT = { youtube: { vi: "YouTube", e: "▶️" }, tiktok: { vi: "TikTok", e: "🎵" }, facebook: { vi: "Facebook", e: "📘" } };
+  function pushLink(placeId, pv, title, by, mine) {
+    if (!pv || !byId(placeId)) return null;
+    var dup = S.links.some(function (l) { return l.place === placeId && l.url === pv.url; });
+    if (dup) return null;
+    var e = {
+      lid: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+      place: placeId, url: pv.url, type: pv.type, id: pv.id,
+      title: String(title || "").replace(/[<>]/g, "").trim().slice(0, 80), by: by, mine: !!mine
+    };
+    S.links.push(e);
+    return e;
+  }
+  function linksFor(placeId) {
+    var fromRepo = (CURATED[placeId] || []).map(function (c) {
+      var pv = L.parseVideoLink(c.url);
+      return pv ? { type: pv.type, id: pv.id, url: pv.url, title: c.title || "", by: "Nhóm (repo)", fixed: true } : null;
+    }).filter(Boolean);
+    return fromRepo.concat(S.links.filter(function (l) { return l.place === placeId; }));
+  }
+  function linkLabel(l) {
+    if (l.title) return l.title;
+    var m = l.url.match(/tiktok\.com\/(@[^/]+)/);
+    if (m) return "Video của " + m[1];
+    return PLAT[l.type].vi + " · " + l.url.replace(/^https:\/\/(www\.)?/, "").slice(0, 42);
+  }
+  function linkRow(l) {
+    var thumb = l.type === "youtube" && l.id
+      ? '<img loading="lazy" alt="" src="https://i.ytimg.com/vi/' + encodeURIComponent(l.id) + '/mqdefault.jpg">'
+      : '<span class="em" aria-hidden="true">' + PLAT[l.type].e + "</span>";
+    return '<div class="linkrow"><a class="vid" target="_blank" rel="noopener" href="' + esc(l.url) + '">' + thumb +
+      "<span><b>" + esc(linkLabel(l)) + "</b><br>" + PLAT[l.type].vi + (l.by ? " · " + esc(l.by) : "") + "</span></a>" +
+      (l.lid ? '<button class="icon-btn" data-act="rmlink" data-lid="' + l.lid + '" aria-label="Xóa link">🗑️</button>' : "") + "</div>";
+  }
+  var activeIsInput = function () { return /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName); };
+  function autoTitle(entry) {
+    // Cố lấy tiêu đề từ oEmbed của nền tảng; không được thì thôi (link vẫn dùng bình thường).
+    if (!window.fetch || !window.AbortController || entry.title) return;
+    var ep = entry.type === "youtube" ? "https://www.youtube.com/oembed?format=json&url=" :
+      entry.type === "tiktok" ? "https://www.tiktok.com/oembed?url=" : null;
+    if (!ep) return;
+    var ctl = new AbortController();
+    var timer = setTimeout(function () { ctl.abort(); }, 3000);
+    fetch(ep + encodeURIComponent(entry.url), { signal: ctl.signal }).then(function (r) { return r.ok ? r.json() : null; }).then(function (j) {
+      clearTimeout(timer);
+      if (j && typeof j.title === "string" && j.title) {
+        entry.title = j.title.replace(/[<>]/g, "").slice(0, 80); save();
+        if (!activeIsInput()) render();
+      }
+    }).catch(function () { clearTimeout(timer); });
+  }
+  function curatedSnippet() {
+    var by = {};
+    S.links.forEach(function (l) { (by[l.place] = by[l.place] || []).push(l); });
+    var lines = Object.keys(by).map(function (id) {
+      return "  " + id + ": [\n" + by[id].map(function (l) {
+        return "    { type: " + JSON.stringify(l.type) + ", title: " + JSON.stringify(l.title || "") + ", url: " + JSON.stringify(l.url) + " }";
+      }).join(",\n") + "\n  ]";
+    });
+    return lines.join(",\n");
+  }
+
+  function viewLinks() {
+    var opts = places().map(function (p) {
+      return '<option value="' + p.id + '"' + (p.id === linkPlace ? " selected" : "") + ">" + p.emoji + " " + esc(p.name) + "</option>";
+    }).join("");
+    var out = '<h3 class="sec">Thêm link review</h3>' +
+      '<div class="banner">Dán link <b>TikTok</b> hoặc <b>YouTube</b> (Facebook cũng được). Dán cả đoạn chữ chia sẻ kèm link vẫn nhận. Link lưu trên máy này và đi kèm khi bạn chia sẻ lựa chọn ở mục Top.</div>' +
+      '<label class="field">Link<input id="linkUrl" inputmode="url" autocomplete="off" autocapitalize="off" placeholder="https://www.tiktok.com/@…/video/… hoặc https://youtu.be/…"></label>' +
+      '<div class="live-note" id="linkHint" aria-live="polite"></div>' +
+      '<label class="field">Review này về địa điểm nào?<select id="linkPlaceSel">' + opts + "</select></label>" +
+      '<label class="field">Ghi chú / tiêu đề (không bắt buộc)<input id="linkTitle" maxlength="80" placeholder="Ví dụ: quán này ngon, xếp hàng 30 phút"></label>' +
+      '<button class="btn pink block" data-act="addlink">Thêm link</button>';
+    var any = false, groups = "";
+    places().forEach(function (p) {
+      var ls = linksFor(p.id);
+      if (!ls.length) return;
+      any = true;
+      groups += '<h4 class="grp"><button data-act="detail" data-id="' + p.id + '">' + p.emoji + " " + esc(p.name) + " (" + ls.length + ")</button></h4>" + ls.map(linkRow).join("");
+    });
+    out += '<h3 class="sec">Link đã lưu</h3>' + (any ? groups : '<div class="empty"><div class="big">📎</div><p>Chưa có link nào. Dán link đầu tiên ở trên nhé.</p></div>');
+    if (S.links.length) {
+      out += '<h3 class="sec">Lưu vĩnh viễn vào GitHub</h3><div class="live-note">Link trên máy này sẽ mất nếu xóa dữ liệu trình duyệt. Muốn giữ lâu dài và cho cả nhóm cùng thấy, chép đoạn code rồi dán vào <code>data/curated.js</code> trong repo.</div>' +
+        '<div class="btn-row"><button class="btn ghost" data-act="copycurated">Chép đoạn code curated.js</button></div>';
+    }
+    return out;
   }
 
   /* ---------- Giao diện: khung ---------- */
   function render() {
     var app = $("#app");
-    var view = tab === "swipe" ? viewSwipe() : tab === "top" ? viewTop() : tab === "plan" ? viewPlan() : viewNear();
-    var tabs = [["swipe", "👆", "Vuốt"], ["top", "🏆", "Top nhóm"], ["plan", "🗓️", "Lịch"], ["near", "📍", "Gần bạn"]];
+    var view = tab === "swipe" ? viewSwipe() : tab === "top" ? viewTop() : tab === "plan" ? viewPlan() : tab === "links" ? viewLinks() : viewNear();
+    var tabs = [["swipe", "👆", "Vuốt"], ["top", "🏆", "Top"], ["plan", "🗓️", "Lịch"], ["near", "📍", "Gần bạn"], ["links", "📎", "Link"]];
     app.innerHTML =
       '<header class="hdr"><div class="brand">BKK <b>Swipe</b></div>' +
       '<span class="pill">' + esc(fmtDate(C.trip.start) + "–" + fmtDate(C.trip.end)) + " · " + C.trip.people + ' người</span>' +
@@ -400,7 +498,6 @@
   function placeSheet(p) {
     var links = L.reviewLinks(p);
     var lp = live.places[p.id] || {};
-    var cur = CURATED[p.id] || [];
     var tips = (p.tips || []).map(function (t) { return "<li>" + esc(t) + "</li>"; }).join("");
     var liveHtml = "";
     if (lp.rating) liveHtml += '<p><b>★ ' + esc(lp.rating) + "</b>" + (lp.ratings ? " (" + Number(lp.ratings).toLocaleString("vi-VN") + " đánh giá Google)" : "") + "</p>";
@@ -412,10 +509,8 @@
     }
     if (liveHtml) liveHtml += '<div class="live-note">Dữ liệu tự động cập nhật' + (live.updatedAt ? " lúc " + esc(live.updatedAt.slice(0, 10)) : "") + ".</div>";
 
-    var curHtml = cur.map(function (c) {
-      var ok = /^https:\/\//.test(c.url || "");
-      return ok ? '<a class="btn ghost" target="_blank" rel="noopener" href="' + esc(c.url) + '">' + esc((c.type || "link").toUpperCase()) + ": " + esc(c.title || "Xem") + "</a>" : "";
-    }).join("");
+    var mine = linksFor(p.id);
+    var curHtml = mine.map(linkRow).join("");
 
     return '<div class="sheet-head"><span class="em" aria-hidden="true">' + p.emoji + "</span><h2>" + esc(p.name) + '</h2><button class="icon-btn" data-act="close" aria-label="Đóng">✕</button></div>' +
       '<div class="chips">' + p.cats.map(function (c) { return '<span class="chip">' + esc(CAT_VI[c]) + "</span>"; }).join("") + "</div>" +
@@ -433,7 +528,9 @@
       '<a class="btn ghost" target="_blank" rel="noopener" href="' + esc(links.facebook) + '">Facebook</a>' +
       '<a class="btn ghost" target="_blank" rel="noopener" href="' + esc(links.maps) + '">Đánh giá Google Maps</a></div>' +
       '<div class="live-note">Các nút mở trang tìm kiếm của từng nền tảng, nên luôn ra bài mới nhất. Facebook có thể yêu cầu đăng nhập.</div>' +
-      (curHtml ? '<h3 class="sec">Link nhóm đã lưu</h3><div class="btn-row">' + curHtml + "</div>" : "") +
+      '<h3 class="sec">Link review của nhóm</h3>' +
+      (curHtml || '<div class="live-note">Chưa có link nào cho nơi này.</div>') +
+      '<div class="btn-row"><button class="btn ghost" data-act="gotoadd" data-id="' + p.id + '">➕ Thêm link TikTok / YouTube</button></div>' +
       (liveHtml ? '<h3 class="sec">Cập nhật tự động</h3>' + liveHtml : "") +
       '<h3 class="sec">Nguồn tham khảo</h3><ul class="src">' + p.sources.map(function (s) { return '<li><a target="_blank" rel="noopener" href="' + esc(s.u) + '">' + esc(s.t) + "</a></li>"; }).join("") + "</ul>" +
       '<div class="live-note">Dữ liệu tổng hợp ngày 16/11/2026. Giờ mở cửa và giá có thể thay đổi, hãy kiểm tra lại trước khi đi.</div>';
@@ -500,6 +597,20 @@
         addMember(m); toast("Đã thêm lựa chọn của " + m.n + "."); render(); break;
       }
       case "rmmember": S.members.splice(Number(d.i), 1); save(); render(); break;
+      case "gotoadd": linkPlace = d.id; closeSheet(); tab = "links"; render(); $("#main").scrollTop = 0; break;
+      case "addlink": {
+        var pv = L.parseVideoLink($("#linkUrl").value);
+        if (!pv) { toast("Link không hợp lệ. Chỉ nhận link TikTok, YouTube hoặc Facebook."); break; }
+        linkPlace = $("#linkPlaceSel").value;
+        var entry = pushLink(linkPlace, pv, $("#linkTitle").value, S.name || "Tôi", true);
+        if (!entry) { toast("Link này đã có ở địa điểm đó rồi."); break; }
+        save(); render(); toast("Đã thêm link " + PLAT[pv.type].vi + ".");
+        autoTitle(entry);
+        break;
+      }
+      case "rmlink":
+        S.links = S.links.filter(function (l) { return l.lid !== d.lid; }); save(); render(); toast("Đã xóa link."); break;
+      case "copycurated": copy(curatedSnippet(), "Đã chép. Dán vào data/curated.js, bên trong dấu { }."); break;
       case "savesettings": {
         S.name = $("#setName").value.trim().slice(0, 20);
         var raw = $("#setHotel").value.trim();
@@ -524,6 +635,15 @@
   });
   document.addEventListener("change", function (e) {
     if (e.target.id === "minVotes") { S.minVotes = Number(e.target.value); save(); render(); }
+    if (e.target.id === "linkPlaceSel") linkPlace = e.target.value;
+  });
+  document.addEventListener("input", function (e) {
+    if (e.target.id !== "linkUrl") return;
+    var hint = $("#linkHint");
+    var v = e.target.value.trim();
+    if (!v) { hint.textContent = ""; return; }
+    var pv = L.parseVideoLink(v);
+    hint.textContent = pv ? "✅ Nhận diện: " + PLAT[pv.type].vi : "⚠️ Chưa nhận ra link TikTok, YouTube hoặc Facebook.";
   });
   document.addEventListener("keydown", function (e) {
     if (e.key === "Escape" && openKind) { closeSheet(); return; }
